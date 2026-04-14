@@ -161,7 +161,10 @@ export default {
           // Try to load a stored OAuth token; fall back to treating the bearer
           // value as a raw access token (useful for predefined / script tokens).
           const storedRecord = env.TOKEN_STORE
-            ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch(() => null)
+            ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+                console.error('[freepieces] Failed to retrieve token from KV:', err);
+                return null;
+              })
             : null;
 
           if (storedRecord) {
