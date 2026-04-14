@@ -70,6 +70,126 @@ export function getPiece(name: string): StoredPiece | undefined {
   return pieces.get(name);
 }
 
+// ---------------------------------------------------------------------------
+// Secret derivation
+// ---------------------------------------------------------------------------
+
+export interface SecretDef {
+  /** Cloudflare secret / env key, e.g. "SLACK_BOT_TOKEN" */
+  key: string;
+  /** Human-readable label, e.g. "Bot Token" */
+  displayName: string;
+  /** Human-readable hint about what this token is / where to find it */
+  description?: string;
+  /** Whether the secret is mandatory within this auth mode */
+  required: boolean;
+  /** Ready-to-paste CLI command */
+  command: string;
+}
+
+/**
+ * A single auth mode with its required secrets.
+ * When a piece has multiple groups, the user picks ONE group to set up.
+ */
+export interface SecretGroup {
+  /** AP auth type: 'OAUTH2', 'CUSTOM_AUTH', 'SECRET_TEXT', 'BASIC_AUTH', 'oauth2', 'apiKey' */
+  authType: string;
+  /** Human-readable mode label, e.g. "Bot Token", "OAuth2" */
+  displayName: string;
+  secrets: SecretDef[];
+}
+
+/** camelCase → SCREAMING_SNAKE_CASE (mirrors worker.ts envKey derivation) */
+function toScreamingSnake(s: string): string {
+  return s.replace(/([A-Z])/g, '_$1').toUpperCase();
+}
+
+function makeSecret(key: string, displayName: string, required: boolean, description?: string): SecretDef {
+  return { key, displayName, description, required, command: `wrangler secret put ${key}` };
+}
+
+/**
+ * Derive auth mode groups for a piece, each containing the secrets needed for that mode.
+ * Pieces with multiple auth modes (e.g. Slack: OAUTH2 + CUSTOM_AUTH) return one group per mode
+ * so the user can pick the mode they want to set up — not a combined flat list.
+ */
+function deriveSecrets(stored: StoredPiece): SecretGroup[] {
+  if (stored.kind === 'native') {
+    const auth = stored.def.auth as unknown as Record<string, unknown>;
+    if (auth['type'] === 'oauth2') {
+      return [{
+        authType: 'oauth2',
+        displayName: 'OAuth2',
+        secrets: [
+          makeSecret(String(auth['clientIdEnvKey'] ?? 'OAUTH_CLIENT_ID'), 'OAuth Client ID', true),
+          makeSecret(String(auth['clientSecretEnvKey'] ?? 'OAUTH_CLIENT_SECRET'), 'OAuth Client Secret', true),
+          makeSecret('TOKEN_ENCRYPTION_KEY', 'Token Encryption Key (openssl rand -hex 32)', true),
+        ],
+      }];
+    }
+    // apiKey and none: secrets supplied per-request, nothing to pre-configure
+    return [];
+  }
+
+  const prefix = stored.name.toUpperCase();
+  const rawAuth = stored.piece.auth;
+  const authArr = Array.isArray(rawAuth)
+    ? (rawAuth as unknown as Array<Record<string, unknown>>)
+    : [(rawAuth as unknown) as Record<string, unknown>];
+
+  const groups: SecretGroup[] = [];
+
+  for (const authDef of authArr) {
+    const type = String(authDef['type'] ?? '');
+    const label = String(authDef['displayName'] ?? type);
+
+    if (type === 'OAUTH2') {
+      groups.push({
+        authType: 'OAUTH2',
+        displayName: label || 'OAuth2',
+        secrets: [
+          makeSecret(`${prefix}_CLIENT_ID`, 'OAuth Client ID', true),
+          makeSecret(`${prefix}_CLIENT_SECRET`, 'OAuth Client Secret', true),
+          makeSecret('TOKEN_ENCRYPTION_KEY', 'Token Encryption Key (openssl rand -hex 32)', true),
+        ],
+      });
+    } else if (type === 'CUSTOM_AUTH') {
+      const props = (authDef['props'] ?? {}) as Record<string, Record<string, unknown>>;
+      const secrets = Object.entries(props).map(([key, prop]) =>
+        makeSecret(
+          `${prefix}_${toScreamingSnake(key)}`,
+          String(prop['displayName'] ?? key),
+          Boolean(prop['required']),
+          prop['description'] != null ? String(prop['description']) : undefined,
+        )
+      );
+      if (secrets.length > 0) {
+        groups.push({ authType: 'CUSTOM_AUTH', displayName: label || 'Custom Auth', secrets });
+      }
+    } else if (type === 'SECRET_TEXT') {
+      groups.push({
+        authType: 'SECRET_TEXT',
+        displayName: label || 'Secret Key',
+        secrets: [
+          makeSecret(`${prefix}_TOKEN`, 'Secret Token', true),
+          makeSecret('TOKEN_ENCRYPTION_KEY', 'Token Encryption Key (openssl rand -hex 32)', true),
+        ],
+      });
+    } else if (type === 'BASIC_AUTH') {
+      groups.push({
+        authType: 'BASIC_AUTH',
+        displayName: label || 'Basic Auth',
+        secrets: [
+          makeSecret(`${prefix}_USERNAME`, 'Username', true),
+          makeSecret(`${prefix}_PASSWORD`, 'Password', true),
+        ],
+      });
+    }
+  }
+
+  return groups;
+}
+
 /** Normalised piece list for the /pieces API. */
 export function listPieces(): Array<{
   name: string;
@@ -79,6 +199,7 @@ export function listPieces(): Array<{
   auth: PieceDefinition['auth'] | ApPiece['auth'];
   actions: Array<{ name: string; displayName: string; description?: string; props?: Record<string, PropDefinition> }>;
   triggers: Array<{ name: string; displayName: string; description?: string; type: string; props?: Record<string, PropDefinition> }>;
+  secrets: SecretGroup[];
 }> {
   return [...pieces.values()].map((stored) => {
     if (stored.kind === 'native') {
@@ -96,6 +217,7 @@ export function listPieces(): Array<{
           props: a.props,
         })),
         triggers: [],
+        secrets: deriveSecrets(stored),
       };
     }
     // AP piece
@@ -119,6 +241,7 @@ export function listPieces(): Array<{
         type: t.type,
         props: extractProps(t.props),
       })),
+      secrets: deriveSecrets(stored),
     };
   });
 }

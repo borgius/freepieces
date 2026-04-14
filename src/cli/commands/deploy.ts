@@ -1,7 +1,6 @@
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import ora from 'ora';
 import chalk from 'chalk';
 import {
   intro,
@@ -11,14 +10,14 @@ import {
   log,
   isCancel,
 } from '@clack/prompts';
+import { debug } from '../util/debug.js';
 
 export async function deployCommand(opts: { yes?: boolean } = {}): Promise<void> {
   const cwd = process.cwd();
 
   if (!existsSync(join(cwd, 'wrangler.toml'))) {
-    console.error(
-      chalk.red('No wrangler.toml found. Run `fp init` first or cd into your project.'),
-    );
+    console.error(chalk.red('[E002] No wrangler.toml found.'));
+    console.error(chalk.dim('  → Run `fp init` to scaffold a new project, or cd into an existing one.'));
     process.exit(1);
   }
 
@@ -36,31 +35,36 @@ export async function deployCommand(opts: { yes?: boolean } = {}): Promise<void>
   // Build admin SPA if vite config exists
   if (existsSync(join(cwd, 'vite.config.admin.ts')) || existsSync(join(cwd, 'vite.config.admin.js'))) {
     s.start('Building admin SPA…');
-    try {
-      execSync('npm run build:admin', { cwd, stdio: 'pipe' });
+    debug('deploy', 'npm run build:admin');
+    const buildResult = spawnSync('npm', ['run', 'build:admin'], { cwd, encoding: 'utf-8', stdio: 'pipe' });
+    if (buildResult.error || buildResult.status !== 0) {
+      s.stop('Admin build failed (continuing)');
+      debug('deploy', buildResult.stderr ?? '');
+      log.warn('Admin SPA build failed — the Worker will deploy without updated UI assets.');
+    } else {
       s.stop('Admin SPA built');
-    } catch (err) {
-      s.stop('Admin build failed');
-      log.warn(String(err));
-      // Continue anyway — the worker itself can deploy without the admin SPA
     }
   }
 
   // Wrangler deploy
   s.start('Deploying to Cloudflare Workers…');
-  try {
-    const output = execSync('npx wrangler deploy', { cwd, encoding: 'utf-8', stdio: 'pipe' });
-    s.stop('Deployed!');
-    // Extract URL from wrangler output
-    const urlMatch = output.match(/https:\/\/[a-z0-9-]+\.workers\.dev/);
-    if (urlMatch) {
-      outro(`Live at ${chalk.cyan(urlMatch[0])}`);
-    } else {
-      outro('Deployment complete.');
-    }
-  } catch (err) {
-    s.stop('Deployment failed');
-    log.error(String(err));
+  debug('deploy', 'npx wrangler deploy');
+  const deployResult = spawnSync('npx', ['wrangler', 'deploy'], {
+    cwd,
+    encoding: 'utf-8',
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
+  if (deployResult.error || deployResult.status !== 0) {
+    s.stop('[E005] Deployment failed');
+    if (deployResult.stderr) process.stderr.write(deployResult.stderr + '\n');
+    log.error('Run `npx wrangler deploy` directly for full output, or `npx wrangler login` if unauthenticated.');
     process.exit(1);
+  }
+  s.stop('Deployed!');
+  const urlMatch = (deployResult.stdout ?? '').match(/https:\/\/[a-z0-9-]+\.workers\.dev/);
+  if (urlMatch) {
+    outro(`Live at ${chalk.cyan(urlMatch[0])}`);
+  } else {
+    outro('Deployment complete.');
   }
 }

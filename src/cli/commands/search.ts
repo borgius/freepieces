@@ -1,19 +1,27 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { searchNpmPieces } from '../util/npm-registry.js';
+import { debug } from '../util/debug.js';
 
-export async function searchCommand(query?: string): Promise<void> {
+export async function searchCommand(query?: string, opts: { json?: boolean } = {}): Promise<void> {
   const q = (query ?? '').trim();
   const label = q ? `@activepieces/piece-${q.replace(/^@activepieces\/piece-/i, '')}` : '@activepieces/piece-*';
-  const spinner = ora(`Searching npm for ${chalk.cyan(label)}…`).start();
+  const spinner = opts.json ? null : ora(`Searching npm for ${chalk.cyan(label)}…`).start();
 
   let results;
   try {
+    debug('search', `query="${q}"`);
     results = await searchNpmPieces(q);
-    spinner.succeed(`Found ${results.length} package(s)`);
+    spinner?.succeed(`Found ${results.length} package(s)`);
   } catch (err) {
-    spinner.fail(String(err));
+    spinner?.fail(`[E006] npm search failed — check your network connection.`);
     process.exit(1);
+  }
+
+  // 3.2 Structured output: machine-readable JSON when requested
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+    return;
   }
 
   if (results.length === 0) {

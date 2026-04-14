@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "vite",
     "dev:admin": "vite --config vite.config.admin.ts",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && npm run build:admin && npm run build:cli",
     "build:admin": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.admin.ts",
     "build:cli": "tsc --project tsconfig.cli.json && chmod +x dist/cli/bin.js",
     "check": "tsc --noEmit && tsc --noEmit --project tsconfig.client.json && tsc --noEmit --project tsconfig.admin.json",
@@ -22,11 +22,13 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260405.0",
+    "@types/bun": "^1.3.12",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
     "dotenv": "^17.4.2",
+    "playwright": "^1.59.1",
     "typescript": "^5.8.3",
     "vite": "^6.3.1",
     "vitest": "^4.1.4",

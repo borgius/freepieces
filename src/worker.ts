@@ -23,6 +23,7 @@
  *   GET  /admin/api/pieces                   → list pieces + install status
  *   POST /admin/api/pieces/:name/install     → enable a piece
  *   DELETE /admin/api/pieces/:name           → disable a piece
+ *   GET  /admin/api/secrets                  → global + per-piece secrets with set/missing status
  *
  * Security model
  * ──────────────
@@ -35,7 +36,7 @@
  *   • Admin sessions                         → HMAC-signed cookie (__fp_admin)
  */
 
-import { registerPiece, registerApPiece, listPieces, getPiece, getTrigger } from './framework/registry';
+import { listPieces, getPiece, getTrigger } from './framework/registry';
 import { buildCallbackUrl } from './framework/auth';
 import { buildLoginUrl, handleCallback, refreshTokenIfNeeded } from './lib/oauth';
 import { getToken, storeToken } from './lib/token-store';
@@ -46,23 +47,8 @@ import {
   parseCookie,
   COOKIE_NAME
 } from './lib/admin-session';
-// @fp:imports:start
-import { exampleOAuthPiece } from './pieces/example-oauth';
-import { exampleApiKeyPiece } from './pieces/example-apikey';
-import { gmailPiece } from './pieces/gmail';
-import { slackPiece } from './pieces/npm-slack.js';
-// @fp:imports:end
+import './pieces/index.js';
 import type { Env, OAuth2AuthDefinition, ApPiece } from './framework/types';
-
-// ---------------------------------------------------------------------------
-// Register pieces
-// ---------------------------------------------------------------------------
-// @fp:register:start
-registerPiece(exampleOAuthPiece);
-registerPiece(exampleApiKeyPiece);
-registerPiece(gmailPiece);
-registerApPiece('slack', slackPiece);
-// @fp:register:end
 
 // ---------------------------------------------------------------------------
 // Activepieces context builder
@@ -250,6 +236,95 @@ function json(data: unknown, init: ResponseInit = {}): Response {
 
 /** KV key prefix for admin piece-enabled flags. */
 const PIECE_FLAG = (name: string) => `__admin:enabled:${name}`;
+
+/**
+ * Global infrastructure secrets shown in the Settings › Secrets panel.
+ * These keys are filtered OUT of per-piece secret groups in the pieces API.
+ */
+const GLOBAL_SECRET_DEFS = [
+  {
+    key: 'FREEPIECES_PUBLIC_URL',
+    displayName: 'Public URL',
+    description: 'Base URL for OAuth callbacks and webhook routes. Set as a [vars] entry in wrangler.toml.',
+    required: true,
+    command: 'Set FREEPIECES_PUBLIC_URL in wrangler.toml [vars]',
+  },
+  {
+    key: 'TOKEN_STORE',
+    displayName: 'Token Store (KV Namespace)',
+    description: 'KV namespace binding for storing OAuth tokens and admin state.',
+    required: true,
+    command: 'Configure [[kv_namespaces]] in wrangler.toml',
+  },
+  {
+    key: 'TOKEN_ENCRYPTION_KEY',
+    displayName: 'Token Encryption Key',
+    description: 'AES-GCM 32-byte key for encrypting stored OAuth tokens. Generate: openssl rand -hex 32',
+    required: true,
+    command: 'wrangler secret put TOKEN_ENCRYPTION_KEY',
+  },
+  {
+    key: 'ADMIN_USER',
+    displayName: 'Admin Username',
+    description: 'Username for the admin panel.',
+    required: true,
+    command: 'wrangler secret put ADMIN_USER',
+  },
+  {
+    key: 'ADMIN_PASSWORD',
+    displayName: 'Admin Password',
+    description: 'Password for the admin panel.',
+    required: true,
+    command: 'wrangler secret put ADMIN_PASSWORD',
+  },
+  {
+    key: 'ADMIN_SIGNING_KEY',
+    displayName: 'Admin Session Signing Key',
+    description: 'HMAC key for signing admin session tokens. Generate: openssl rand -hex 32',
+    required: true,
+    command: 'wrangler secret put ADMIN_SIGNING_KEY',
+  },
+  {
+    key: 'OAUTH_CLIENT_ID',
+    displayName: 'OAuth Client ID',
+    description: 'OAuth app client ID for native OAuth pieces using shared credentials.',
+    required: false,
+    command: 'wrangler secret put OAUTH_CLIENT_ID',
+  },
+  {
+    key: 'OAUTH_CLIENT_SECRET',
+    displayName: 'OAuth Client Secret',
+    description: 'OAuth app client secret for native OAuth pieces using shared credentials.',
+    required: false,
+    command: 'wrangler secret put OAUTH_CLIENT_SECRET',
+  },
+] as const;
+
+/** Keys that belong to global config — filtered out of per-piece secret groups. */
+const GLOBAL_SECRET_KEY_SET = new Set<string>(GLOBAL_SECRET_DEFS.map((d) => d.key));
+
+/**
+ * Extra secret groups that are not derivable from AP auth definitions but are
+ * needed for specific pieces (e.g. webhook signature verification).
+ * Keyed by piece name.
+ */
+const PIECE_EXTRA_SECRET_GROUPS: Record<string, Array<{ authType: string; displayName: string; secrets: Array<{ key: string; displayName: string; description: string; required: boolean; command: string }> }>> = {
+  slack: [
+    {
+      authType: 'WEBHOOK_SECURITY',
+      displayName: 'Webhook Security',
+      secrets: [
+        {
+          key: 'SLACK_SIGNING_SECRET',
+          displayName: 'Slack Signing Secret',
+          description: 'Used to verify incoming Slack Event API webhook request signatures. Found in Slack app → Basic Information → Signing Secret.',
+          required: false,
+          command: 'wrangler secret put SLACK_SIGNING_SECRET',
+        },
+      ],
+    },
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // Webhook subscription helpers
@@ -748,6 +823,7 @@ export default {
       // GET /admin/api/pieces
       if (pathname === '/admin/api/pieces' && request.method === 'GET') {
         const all = listPieces();
+        const envRecord = env as Record<string, unknown>;
         const result = await Promise.all(
           all.map(async (p) => ({
             name: p.name,
@@ -768,10 +844,52 @@ export default {
               type: t.type,
               props: t.props ?? null,
             })),
+            secrets: [
+                ...p.secrets,
+                ...(PIECE_EXTRA_SECRET_GROUPS[p.name] ?? []),
+              ]
+              .map((group) => ({
+                ...group,
+                secrets: group.secrets
+                  .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
+                  .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
+              }))
+              .filter((group) => group.secrets.length > 0),
             enabled: await isPieceEnabled(env.TOKEN_STORE, p.name)
           }))
         );
         return json(result);
+      }
+
+      // GET /admin/api/secrets
+      if (pathname === '/admin/api/secrets' && request.method === 'GET') {
+        const envRecord = env as Record<string, unknown>;
+        const global = GLOBAL_SECRET_DEFS.map((def) => ({
+          key: def.key,
+          displayName: def.displayName,
+          description: def.description,
+          required: def.required,
+          command: def.command,
+          isSet: Boolean(envRecord[def.key]),
+        }));
+        const pieces = listPieces()
+          .map((p) => ({
+            name: p.name,
+            displayName: p.displayName,
+            groups: [
+                ...p.secrets,
+                ...(PIECE_EXTRA_SECRET_GROUPS[p.name] ?? []),
+              ]
+              .map((group) => ({
+                ...group,
+                secrets: group.secrets
+                  .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
+                  .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
+              }))
+              .filter((group) => group.secrets.length > 0),
+          }))
+          .filter((p) => p.groups.length > 0);
+        return json({ global, pieces });
       }
 
       // POST /admin/api/pieces/:name/install  → enable

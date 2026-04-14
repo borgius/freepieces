@@ -10,7 +10,7 @@ import {
   cancel,
   note,
 } from '@clack/prompts';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -20,6 +20,7 @@ import { searchNpmPieces, type NpmPackageInfo } from '../util/npm-registry.js';
 import { scanNativePieces } from '../util/pieces-scanner.js';
 import { syncWorkerPieces, readRegisteredPieces, type PieceCodeEntry } from '../util/codegen.js';
 import { generateWrapper, toPieceSymbol } from './install.js';
+import { debug } from '../util/debug.js';
 export async function tuiCommand(): Promise<void> {
   const cwd = process.cwd();
 
@@ -175,13 +176,14 @@ export async function tuiCommand(): Promise<void> {
 
     if (!existsSync(wrapperPath)) {
       s.start(`Installing ${npmPkg}…`);
-      try {
-        execSync(`npm install ${npmPkg}`, { cwd, stdio: 'pipe' });
-        s.stop(`Installed ${npmPkg}`);
-      } catch (err) {
-        s.stop(`Failed to install ${npmPkg}: ${String(err)}`);
+      debug('tui', `npm install ${npmPkg}`);
+      const result = spawnSync('npm', ['install', npmPkg], { cwd, encoding: 'utf-8', stdio: 'pipe' });
+      if (result.error || result.status !== 0) {
+        s.stop(`[E004] Failed to install ${npmPkg} — check network / registry access.`);
+        if (result.stderr) process.stderr.write(result.stderr + '\n');
         continue;
       }
+      s.stop(`Installed ${npmPkg}`);
 
       // Generate wrapper
       const symbol = toPieceSymbol(pieceName);
@@ -220,23 +222,31 @@ export async function tuiCommand(): Promise<void> {
   if (!isCancel(doDeploy) && doDeploy) {
     if (existsSync(join(cwd, 'vite.config.admin.ts'))) {
       s.start('Building admin SPA…');
-      try {
-        execSync('npm run build:admin', { cwd, stdio: 'pipe' });
-        s.stop('Admin SPA built');
-      } catch {
+      debug('tui', 'npm run build:admin');
+      const buildResult = spawnSync('npm', ['run', 'build:admin'], { cwd, encoding: 'utf-8', stdio: 'pipe' });
+      if (buildResult.error || buildResult.status !== 0) {
         s.stop('Admin build failed (continuing)');
+        debug('tui', buildResult.stderr ?? '');
+      } else {
+        s.stop('Admin SPA built');
       }
     }
 
     s.start('Deploying to Cloudflare…');
-    try {
-      const out = execSync('npx wrangler deploy', { cwd, encoding: 'utf-8', stdio: 'pipe' });
+    debug('tui', 'npx wrangler deploy');
+    const deployResult = spawnSync('npx', ['wrangler', 'deploy'], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['inherit', 'pipe', 'pipe'],
+    });
+    if (deployResult.error || deployResult.status !== 0) {
+      s.stop('[E005] Deployment failed');
+      if (deployResult.stderr) process.stderr.write(deployResult.stderr + '\n');
+      log.error('Run `npx wrangler deploy` manually to see full error output.');
+    } else {
       s.stop('Deployed!');
-      const urlMatch = out.match(/https:\/\/[a-z0-9-]+\.workers\.dev/);
+      const urlMatch = (deployResult.stdout ?? '').match(/https:\/\/[a-z0-9-]+\.workers\.dev/);
       if (urlMatch) log.success(`Live: ${chalk.cyan(urlMatch[0])}`);
-    } catch (err) {
-      s.stop('Deployment failed');
-      log.error(String(err));
     }
   }
 

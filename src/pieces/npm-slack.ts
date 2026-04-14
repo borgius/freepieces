@@ -6,11 +6,11 @@
  *   wrangler secret put SLACK_USER_TOKEN   # xoxp-...  (optional)
  *
  * Or pass  Authorization: Bearer <xoxb-...>  at request time.
- *
- * Registered as:  registerApPiece('slack', slackPiece)  in worker.ts
  */
 import pkg from '@activepieces/piece-slack';
-import type { ApPiece } from '../framework/types';
+import { registerApPiece } from '../framework/registry.js';
+import type { ApPiece } from '../framework/types.js';
 
-export const slackPiece = (pkg as unknown as { slack: ApPiece }).slack;
+const slackPiece = (pkg as unknown as { slack: ApPiece }).slack;
+registerApPiece('slack', slackPiece);
 

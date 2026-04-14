@@ -1,4 +1,12 @@
+import { builtinModules } from 'module';
 import { defineConfig } from 'vite';
+
+// Node built-ins available via Cloudflare's nodejs_compat flag — mark as
+// external so Rollup/Vite does not try to bundle them or emit warnings.
+const nodeBuiltins = [
+  ...builtinModules,
+  ...builtinModules.map((m) => `node:${m}`),
+];
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -10,7 +18,7 @@ export default defineConfig({
       fileName: () => 'worker.js'
     },
     rollupOptions: {
-      external: []
+      external: nodeBuiltins,
     },
     minify: false,
     outDir: 'dist'

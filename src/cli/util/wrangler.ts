@@ -1,13 +1,18 @@
-import { execSync, spawn } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
 /** Run a wrangler command synchronously and return stdout. */
 export function runWranglerSync(args: string[], cwd: string): string {
-  return execSync(`npx wrangler ${args.join(' ')}`, {
+  const result = spawnSync('npx', ['wrangler', ...args], {
     cwd,
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr?.trim() || `wrangler exited with code ${result.status ?? 'unknown'}`);
+  }
+  return result.stdout;
 }
 
 /** Run a wrangler command with an inherited stdio so the user can interact. */
@@ -52,13 +57,20 @@ function lookupKVNamespace(name: string, cwd: string): string {
   return ns.id;
 }
 
-/** Set a Cloudflare Worker secret non-interactively. */
+/** Set a Cloudflare Worker secret non-interactively.
+ * Pipes the value via stdin to avoid shell injection (10.1).
+ */
 export function setWranglerSecret(name: string, value: string, cwd: string): void {
-  execSync(`echo ${JSON.stringify(value)} | npx wrangler secret put ${name}`, {
+  const result = spawnSync('npx', ['wrangler', 'secret', 'put', name], {
     cwd,
-    shell: '/bin/bash',
+    input: `${value}\n`,
+    encoding: 'utf-8',
     stdio: ['pipe', 'inherit', 'inherit'],
   });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`wrangler secret put failed with exit code ${result.status ?? 'unknown'}`);
+  }
 }
 
 /** Return true if wrangler is authenticated (wrangler whoami succeeds). */

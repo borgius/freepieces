@@ -2,13 +2,21 @@ import { useState } from 'react';
 import {
   Badge,
   Box,
+  DialogBackdrop,
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogPositioner,
+  DialogRoot,
+  DialogTitle,
   Flex,
   HStack,
   Table,
   Text,
   VStack
 } from '@chakra-ui/react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, ScanSearch } from 'lucide-react';
 import type { PieceAction, PieceTrigger, PropDef } from '../lib/api';
 
 // --------------------------------------------------------------------------
@@ -46,20 +54,20 @@ function PropTable({ props }: { props: Record<string, PropDef> }) {
   if (entries.length === 0) return null;
 
   return (
-    <Box mt={2} borderWidth="1px" borderColor="gray.100" rounded="md" overflow="hidden">
-      <Table.Root size="sm">
+    <Box mt={2} borderWidth="1px" borderColor="gray.100" rounded="md" overflow="hidden" w="full">
+      <Table.Root size="sm" w="full">
         <Table.Header>
           <Table.Row bg="gray.50">
-            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3} w="35%">
               Param
             </Table.ColumnHeader>
-            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3} w="20%">
               Type
             </Table.ColumnHeader>
-            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3} w="10%">
               Req
             </Table.ColumnHeader>
-            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3} hideBelow="md">
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
               Description
             </Table.ColumnHeader>
           </Table.Row>
@@ -94,8 +102,8 @@ function PropTable({ props }: { props: Record<string, PropDef> }) {
                   <Text fontSize="xs" color="gray.400">—</Text>
                 )}
               </Table.Cell>
-              <Table.Cell py={1.5} px={3} hideBelow="md">
-                <Text fontSize="xs" color="gray.500" lineClamp={2}>
+              <Table.Cell py={1.5} px={3}>
+                <Text fontSize="xs" color="gray.500">
                   {def.description ?? ''}
                 </Text>
               </Table.Cell>
@@ -130,17 +138,12 @@ function ItemRow({
   badge,
   badgePalette = 'gray',
 }: ItemRowProps) {
-  const [open, setOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const hasParams = props && Object.keys(props).length > 0;
+  const paramCount = hasParams ? Object.keys(props).length : 0;
 
   return (
-    <Box
-      borderWidth="1px"
-      borderColor="gray.100"
-      rounded="md"
-      overflow="hidden"
-    >
-      {/* Row header — click to expand */}
+    <>
       <Flex
         as="button"
         w="full"
@@ -149,20 +152,14 @@ function ItemRow({
         px={3}
         py={2}
         bg="white"
+        borderWidth="1px"
+        borderColor="gray.100"
+        rounded="md"
         cursor={hasParams ? 'pointer' : 'default'}
-        _hover={hasParams ? { bg: 'gray.50' } : undefined}
-        onClick={() => hasParams && setOpen((s) => !s)}
+        _hover={hasParams ? { bg: 'gray.50', borderColor: 'gray.200' } : undefined}
+        onClick={() => hasParams && setDialogOpen(true)}
         textAlign="left"
       >
-        {/* Chevron */}
-        <Box color="gray.400" flexShrink={0} mt={0.5}>
-          {hasParams ? (
-            open ? <ChevronDown size={13} /> : <ChevronRight size={13} />
-          ) : (
-            <Box w="13px" />
-          )}
-        </Box>
-
         {/* Dot */}
         <Box w={1.5} h={1.5} bg={accentColor} rounded="full" flexShrink={0} />
 
@@ -182,7 +179,7 @@ function ItemRow({
             )}
             {hasParams && (
               <Badge colorPalette="gray" variant="subtle" fontSize="2xs">
-                {Object.keys(props).length} params
+                {paramCount} params
               </Badge>
             )}
           </HStack>
@@ -192,15 +189,45 @@ function ItemRow({
             </Text>
           )}
         </Box>
+
+        {/* Inspect icon — shown only when there are params */}
+        {hasParams && (
+          <Box color="gray.300" flexShrink={0}>
+            <ScanSearch size={13} />
+          </Box>
+        )}
       </Flex>
 
-      {/* Param table — shown when expanded */}
-      {open && hasParams && (
-        <Box px={3} pb={2}>
-          <PropTable props={props} />
-        </Box>
+      {/* Params popup */}
+      {hasParams && (
+        <DialogRoot
+          open={dialogOpen}
+          onOpenChange={(e) => setDialogOpen(e.open)}
+          scrollBehavior="inside"
+        >
+          <DialogBackdrop />
+          <DialogPositioner>
+            <DialogContent maxW="2xl" w="90vw" maxH="80vh" rounded="xl">
+              <DialogHeader pb={2} borderBottomWidth="1px" borderColor="gray.100">
+                <HStack gap={3} align="baseline" flexWrap="wrap">
+                  <DialogTitle fontSize="md">{displayName}</DialogTitle>
+                  <Text fontSize="xs" color="gray.400" fontFamily="mono">{name}</Text>
+                </HStack>
+                {description && (
+                  <Text fontSize="xs" color="gray.500" mt={1}>
+                    {description}
+                  </Text>
+                )}
+              </DialogHeader>
+              <DialogCloseTrigger />
+              <DialogBody pb={6}>
+                <PropTable props={props} />
+              </DialogBody>
+            </DialogContent>
+          </DialogPositioner>
+        </DialogRoot>
       )}
-    </Box>
+    </>
   );
 }
 
@@ -225,7 +252,7 @@ function CollapsibleSection({
   badgePalette,
   items,
 }: SectionProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <Box mt={3}>

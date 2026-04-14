@@ -13,6 +13,42 @@ export interface PropDef {
   defaultValue?: unknown;
 }
 
+export interface SecretDef {
+  key: string;
+  displayName: string;
+  description?: string;
+  required: boolean;
+  command: string;
+  /** Whether the secret is currently set in the worker environment. Populated server-side. */
+  isSet?: boolean;
+}
+
+export interface SecretGroup {
+  authType: string;
+  displayName: string;
+  secrets: SecretDef[];
+}
+
+export interface GlobalSecretDef {
+  key: string;
+  displayName: string;
+  description: string;
+  required: boolean;
+  command: string;
+  isSet: boolean;
+}
+
+export interface PieceSecretInfo {
+  name: string;
+  displayName: string;
+  groups: SecretGroup[];
+}
+
+export interface SecretsResponse {
+  global: GlobalSecretDef[];
+  pieces: PieceSecretInfo[];
+}
+
 export interface PieceAction {
   name: string;
   displayName: string;
@@ -36,6 +72,7 @@ export interface PieceInfo {
   auth: { type: string };
   actions: PieceAction[];
   triggers: PieceTrigger[];
+  secrets: SecretGroup[];
   enabled: boolean;
 }
 
@@ -80,4 +117,8 @@ export async function installPiece(name: string): Promise<void> {
 
 export async function uninstallPiece(name: string): Promise<void> {
   await apiFetch(`/admin/api/pieces/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export async function getSecrets(): Promise<SecretsResponse> {
+  return apiFetch('/admin/api/secrets');
 }

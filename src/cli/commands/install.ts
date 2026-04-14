@@ -1,14 +1,29 @@
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { writeFile, readFile } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
 import ora from 'ora';
 import chalk from 'chalk';
-import { getNpmPackageInfo } from '../util/npm-registry.js';
+import { select, isCancel, cancel } from '@clack/prompts';
+import { getNpmPackageInfo, searchNpmPieces, type NpmPackageInfo } from '../util/npm-registry.js';
+import { debug } from '../util/debug.js';
+
+/** Reject package names that could inject shell arguments (10.1). */
+const VALID_PIECE_RE = /^@activepieces\/piece-[a-z0-9][a-z0-9-]*$/;
+function assertValidPieceName(pkg: string): void {
+  if (!VALID_PIECE_RE.test(pkg)) {
+    console.error(chalk.red(`Invalid piece name: ${chalk.bold(pkg)}`));
+    console.error(chalk.dim('Expected format: @activepieces/piece-<name>  (lowercase letters, digits, hyphens)'));
+    process.exit(1);
+  }
+}
 
 /**
  * Install an @activepieces/piece-* npm package and generate a freepieces
  * wrapper stub in src/pieces/npm-<name>.ts.
+ *
+ * If the exact package is not found on npm, the query is used to search and
+ * the user is prompted to pick a result interactively.
  */
 export async function installCommand(packageName: string): Promise<void> {
   // Normalise package name
@@ -19,30 +34,84 @@ export async function installCommand(packageName: string): Promise<void> {
   const cwd = process.cwd();
 
   if (!existsSync(join(cwd, 'package.json'))) {
-    console.error(chalk.red('No package.json found. Run this command inside a freepieces project.'));
+    console.error(chalk.red('[E001] No package.json found.'));
+    console.error(chalk.dim('  → Run `fp init` to scaffold a new project, or cd into an existing one.'));
     process.exit(1);
   }
 
-  // 1. Fetch metadata
+  // 1. Fetch metadata — fall back to interactive search when not found exactly
   const spinner = ora(`Fetching ${chalk.cyan(pkg)} metadata…`).start();
-  let meta: Awaited<ReturnType<typeof getNpmPackageInfo>>;
+  let meta: NpmPackageInfo;
   try {
     meta = await getNpmPackageInfo(pkg);
     spinner.succeed(`Found ${pkg}@${meta.version}`);
-  } catch (err) {
-    spinner.fail(String(err));
-    process.exit(1);
+  } catch {
+    spinner.warn(`Package ${chalk.cyan(pkg)} not found on npm — searching…`);
+
+    let results: NpmPackageInfo[] = [];
+    const searchSpinner = ora('Searching npm…').start();
+    try {
+      results = await searchNpmPieces(packageName.replace(/^@activepieces\/piece-/i, ''));
+      searchSpinner.succeed(`Found ${results.length} package(s)`);
+    } catch (err) {
+      searchSpinner.fail(String(err));
+      process.exit(1);
+    }
+
+    if (results.length === 0) {
+      console.log(chalk.yellow('No matching packages found.'));
+      process.exit(1);
+    }
+
+    const chosen = await select({
+      message: 'Select a piece to install:',
+      options: results.map((r) => ({
+        value: r.name,
+        label: r.name,
+        hint: r.description ? r.description.slice(0, 60) : undefined,
+      })),
+    });
+
+    if (isCancel(chosen)) {
+      cancel('Cancelled');
+      process.exit(0);
+    }
+
+    const chosenPkg = chosen as string;
+    const metaSpinner = ora(`Fetching ${chalk.cyan(chosenPkg)} metadata…`).start();
+    try {
+      meta = await getNpmPackageInfo(chosenPkg);
+      metaSpinner.succeed(`Found ${chosenPkg}@${meta.version}`);
+    } catch (err) {
+      metaSpinner.fail(`[E003] Could not fetch metadata for ${chosenPkg}`);
+      process.exit(1);
+    }
+
+    // Re-derive resolved pkg name from selection
+    return installResolved(meta.name, meta, cwd);
   }
 
+  return installResolved(pkg, meta, cwd);
+}
+
+async function installResolved(
+  pkg: string,
+  meta: NpmPackageInfo,
+  cwd: string,
+): Promise<void> {
+  assertValidPieceName(pkg);
+
   // 2. npm install
+  debug('install', `running npm install ${pkg}`);
   const s2 = ora(`Installing ${pkg}…`).start();
-  try {
-    execSync(`npm install ${pkg}`, { cwd, stdio: 'pipe' });
-    s2.succeed(`Installed ${pkg}`);
-  } catch (err) {
-    s2.fail(`npm install failed: ${String(err)}`);
+  const npmResult = spawnSync('npm', ['install', pkg], { cwd, encoding: 'utf-8', stdio: 'pipe' });
+  if (npmResult.error || npmResult.status !== 0) {
+    s2.fail(`[E004] npm install failed — check your network or npm registry access.`);
+    if (npmResult.stderr) process.stderr.write(npmResult.stderr + '\n');
     process.exit(1);
   }
+  s2.succeed(`Installed ${pkg}`);
+  debug('install', `npm install done, status=${npmResult.status}`);
 
   // 3. Generate wrapper stub
   const pieceName = pkg.replace('@activepieces/piece-', '');
@@ -64,10 +133,10 @@ export async function installCommand(packageName: string): Promise<void> {
     process.exit(1);
   }
 
-  // 4. Update worker.ts marker block if it exists
-  const workerPath = join(cwd, 'src', 'worker.ts');
-  if (existsSync(workerPath)) {
-    await addPieceToWorker(workerPath, symbolName, `./pieces/npm-${pieceName}`, pieceName);
+  // 4. Update src/pieces/index.ts marker block if it exists
+  const indexPath = join(cwd, 'src', 'pieces', 'index.ts');
+  if (existsSync(indexPath)) {
+    await addPieceToRegistry(indexPath, pieceName);
   }
 
   console.log(
@@ -96,42 +165,27 @@ export function generateWrapper(pkg: string, pieceName: string, symbolName: stri
  *
  * Set required auth secrets (check the @activepieces/${pieceName} auth definition):
  *   npx wrangler secret put ${envPrefix}_TOKEN   # or _BOT_TOKEN, _CLIENT_ID, etc.
- *
- * Registered as: registerApPiece('${pieceName}', ${symbolName})  in worker.ts
  */
 import pkg from '${pkg}';
+import { registerApPiece } from '../framework/registry.js';
 import type { ApPiece } from '../framework/types.js';
 
-export const ${symbolName} = (pkg as unknown as { ${apExportKey}: ApPiece }).${apExportKey};
+const ${symbolName} = (pkg as unknown as { ${apExportKey}: ApPiece }).${apExportKey};
+registerApPiece('${pieceName}', ${symbolName});
 `;
 }
 
-async function addPieceToWorker(workerPath: string, symbol: string, importPath: string, pieceName: string): Promise<void> {
-  const IMPORT_START = '// @fp:imports:start';
-  const IMPORT_END = '// @fp:imports:end';
-  const REGISTER_START = '// @fp:register:start';
-  const REGISTER_END = '// @fp:register:end';
+async function addPieceToRegistry(indexPath: string, pieceName: string): Promise<void> {
+  const PIECES_START = '// @fp:pieces:start';
+  const PIECES_END = '// @fp:pieces:end';
 
-  let content = await readFile(workerPath, 'utf-8');
-  if (!content.includes(IMPORT_START)) return; // no markers — skip
+  let content = await readFile(indexPath, 'utf-8');
+  if (!content.includes(PIECES_START)) return; // no markers — skip
 
-  // Add import if not already present
-  if (!content.includes(importPath)) {
-    const si = content.indexOf(IMPORT_END);
-    content =
-      content.slice(0, si) +
-      `import { ${symbol} } from '${importPath}.js';\n` +
-      content.slice(si);
-  }
+  const importLine = `import './npm-${pieceName}.js';`;
+  if (content.includes(importLine)) return; // already present
 
-  // Add registerApPiece call if not already present
-  if (!content.includes(`registerApPiece('${pieceName}'`) && !content.includes(`registerApPiece("${pieceName}"`)) {
-    const ri = content.indexOf(REGISTER_END);
-    content =
-      content.slice(0, ri) +
-      `registerApPiece('${pieceName}', ${symbol});\n` +
-      content.slice(ri);
-  }
-
-  await writeFile(workerPath, content, 'utf-8');
+  const ri = content.indexOf(PIECES_END);
+  content = content.slice(0, ri) + importLine + '\n' + content.slice(ri);
+  await writeFile(indexPath, content, 'utf-8');
 }
