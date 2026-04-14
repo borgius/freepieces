@@ -1,0 +1,19 @@
+name = "freepieces"
+main = "src/worker.ts"
+compatibility_date = "2026-04-14"
+
+[vars]
+# Public URL for building OAuth callback URLs.
+# Override this with your actual deployed worker URL.
+FREEPIECES_PUBLIC_URL = "http://localhost:8787"
+
+# KV namespace for encrypted per-user OAuth token storage.
+# Bind it in the Cloudflare dashboard under Workers > KV Namespaces.
+# [[kv_namespaces]]
+# binding = "TOKEN_STORE"
+# id = "<your-kv-namespace-id>"
+
+# Static credentials are stored as Cloudflare Secrets (never in vars):
+#   wrangler secret put OAUTH_CLIENT_ID
+#   wrangler secret put OAUTH_CLIENT_SECRET
+#   wrangler secret put TOKEN_ENCRYPTION_KEY   # 32 random hex bytes → AES-GCM key material
