@@ -39,17 +39,23 @@ import {
   parseCookie,
   COOKIE_NAME
 } from './lib/admin-session';
+// @fp:imports:start
 import { exampleOAuthPiece } from './pieces/example-oauth';
 import { exampleApiKeyPiece } from './pieces/example-apikey';
 import { gmailPiece } from './pieces/gmail';
+import { slackPiece } from './pieces/npm-slack.js';
+// @fp:imports:end
 import type { Env, OAuth2AuthDefinition } from './framework/types';
 
 // ---------------------------------------------------------------------------
 // Register pieces
 // ---------------------------------------------------------------------------
+// @fp:register:start
 registerPiece(exampleOAuthPiece);
 registerPiece(exampleApiKeyPiece);
 registerPiece(gmailPiece);
+registerPiece(slackPiece);
+// @fp:register:end
 
 // ---------------------------------------------------------------------------
 // JSON response helper

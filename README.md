@@ -121,6 +121,57 @@ npm run deploy
 
 ---
 
+## Admin UI
+
+The admin console is a React SPA served from `/admin/`.
+
+### First-time setup
+
+Set three Cloudflare Secrets before the first login:
+
+```bash
+wrangler secret put ADMIN_USER          # choose any username, e.g. "admin"
+wrangler secret put ADMIN_PASSWORD      # choose a strong password
+wrangler secret put ADMIN_SIGNING_KEY   # openssl rand -hex 32
+```
+
+Then rebuild and redeploy so the SPA is included:
+
+```bash
+npm run build:admin
+./deploy.sh
+```
+
+### Logging in
+
+Open `https://freepieces.example.workers.dev/admin/` in your browser.  
+Enter the `ADMIN_USER` and `ADMIN_PASSWORD` values you set above.  
+A session cookie (`__fp_admin`) is issued and lasts **24 hours**.
+
+### Local development
+
+Add the same three variables to your `.env` file:
+
+```dotenv
+ADMIN_USER=admin
+ADMIN_PASSWORD=changeme
+ADMIN_SIGNING_KEY=<output of: openssl rand -hex 32>
+```
+
+Then start the dev worker:
+
+```bash
+npm run worker:dev
+```
+
+Open `http://localhost:8787/admin/` and log in with the credentials above.
+
+> **Note:** The SPA is served via the Cloudflare ASSETS binding. During `wrangler dev` the
+> assets are read from `dist/public/`, so run `npm run build:admin` at least once before
+> starting the dev server if you haven't already.
+
+---
+
 ## Using the script client
 
 ```bash

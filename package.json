@@ -4,11 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "fp": "dist/cli/bin.js",
+    "freepieces": "dist/cli/bin.js"
+  },
   "scripts": {
     "dev": "vite",
     "dev:admin": "vite --config vite.config.admin.ts",
     "build": "tsc --noEmit && vite build",
     "build:admin": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.admin.ts",
+    "build:cli": "tsc --project tsconfig.cli.json && chmod +x dist/cli/bin.js",
     "check": "tsc --noEmit && tsc --noEmit --project tsconfig.client.json && tsc --noEmit --project tsconfig.admin.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -28,9 +33,14 @@
   },
   "dependencies": {
     "@activepieces/piece-gmail": "^0.12.0",
+    "@activepieces/piece-slack": "^0.16.1",
     "@activepieces/pieces-framework": "^0.27.0",
     "@chakra-ui/react": "^3.34.0",
+    "@clack/prompts": "^1.2.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
     "lucide-react": "^1.8.0",
+    "ora": "^9.3.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   }
