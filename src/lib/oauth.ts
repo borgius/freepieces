@@ -155,8 +155,8 @@ export async function handleCallback(
     grant_type: 'authorization_code',
     code,
     redirect_uri: callbackUrl,
-    client_id: env.OAUTH_CLIENT_ID,
-    client_secret: env.OAUTH_CLIENT_SECRET
+    client_id: (env[auth.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '',
+    client_secret: (env[auth.clientSecretEnvKey ?? 'OAUTH_CLIENT_SECRET'] as string) ?? ''
   });
 
   const resp = await fetch(auth.tokenUrl, {

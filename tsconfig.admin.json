@@ -3,12 +3,12 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "WebWorker"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
-    "types": ["@cloudflare/workers-types"],
+    "types": [],
     "skipLibCheck": true
   },
-  "include": ["src"],
-  "exclude": ["src/client", "src/admin"]
+  "include": ["src/admin", "vite.config.admin.ts"]
 }

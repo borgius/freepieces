@@ -3,11 +3,19 @@
  *
  * Routes
  * ──────
- *   GET  /health                      → health check
- *   GET  /pieces                      → list registered pieces
- *   GET  /auth/login/:piece?userId=   → start OAuth2 flow
- *   GET  /auth/callback/:piece        → OAuth2 callback (code exchange + KV store)
- *   POST /run/:piece/:action          → execute an action
+ *   GET  /health                             → health check
+ *   GET  /pieces                             → list registered pieces
+ *   GET  /auth/login/:piece?userId=          → start OAuth2 flow
+ *   GET  /auth/callback/:piece               → OAuth2 callback (code exchange + KV store)
+ *   POST /run/:piece/:action                 → execute an action
+ *
+ *   GET  /admin                              → admin SPA (served from ASSETS binding)
+ *   POST /admin/api/login                    → issue admin session cookie
+ *   POST /admin/api/logout                   → clear admin session cookie
+ *   GET  /admin/api/me                       → current session info
+ *   GET  /admin/api/pieces                   → list pieces + install status
+ *   POST /admin/api/pieces/:name/install     → enable a piece
+ *   DELETE /admin/api/pieces/:name           → disable a piece
  *
  * Security model
  * ──────────────
@@ -15,14 +23,25 @@
  *   • TOKEN_ENCRYPTION_KEY                   → Cloudflare Secret (32 bytes hex)
  *   • Per-user tokens                        → encrypted in KV (TOKEN_STORE)
  *   • Predefined tokens for script clients   → sent via  Authorization: Bearer <token>
+ *   • ADMIN_USER / ADMIN_PASSWORD            → Cloudflare Secrets (or .env for local dev)
+ *   • ADMIN_SIGNING_KEY                      → Cloudflare Secret (32 bytes hex)
+ *   • Admin sessions                         → HMAC-signed cookie (__fp_admin)
  */
 
 import { registerPiece, listPieces, getPiece } from './framework/registry';
 import { buildCallbackUrl } from './framework/auth';
 import { buildLoginUrl, handleCallback } from './lib/oauth';
 import { getToken } from './lib/token-store';
+import {
+  createSessionToken,
+  verifySessionToken,
+  timingSafeEqual,
+  parseCookie,
+  COOKIE_NAME
+} from './lib/admin-session';
 import { exampleOAuthPiece } from './pieces/example-oauth';
 import { exampleApiKeyPiece } from './pieces/example-apikey';
+import { gmailPiece } from './pieces/gmail';
 import type { Env, OAuth2AuthDefinition } from './framework/types';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +49,7 @@ import type { Env, OAuth2AuthDefinition } from './framework/types';
 // ---------------------------------------------------------------------------
 registerPiece(exampleOAuthPiece);
 registerPiece(exampleApiKeyPiece);
+registerPiece(gmailPiece);
 
 // ---------------------------------------------------------------------------
 // JSON response helper
@@ -42,6 +62,43 @@ function json(data: unknown, init: ResponseInit = {}): Response {
       ...((init.headers as Record<string, string>) ?? {})
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Admin helpers
+// ---------------------------------------------------------------------------
+
+/** KV key prefix for admin piece-enabled flags. */
+const PIECE_FLAG = (name: string) => `__admin:enabled:${name}`;
+
+/** Returns true when the piece is enabled (default: all bundled pieces are enabled). */
+async function isPieceEnabled(kv: KVNamespace, name: string): Promise<boolean> {
+  const flag = await kv.get(PIECE_FLAG(name));
+  return flag !== 'false';
+}
+
+/** Validate the session cookie and return the payload, or null if missing/invalid. */
+async function requireAdminSession(
+  request: Request,
+  env: Env
+): Promise<{ sub: string } | null> {
+  if (!env.ADMIN_SIGNING_KEY) return null;
+  const token = parseCookie(request.headers.get('cookie'), COOKIE_NAME);
+  if (!token) return null;
+  return verifySessionToken(token, env.ADMIN_SIGNING_KEY);
+}
+
+/** Build a Set-Cookie header value for the admin session. */
+function buildCookie(token: string, isSecure: boolean, maxAge: number): string {
+  const parts = [
+    `${COOKIE_NAME}=${token}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/admin',
+    `Max-Age=${maxAge}`
+  ];
+  if (isSecure) parts.push('Secure');
+  return parts.join('; ');
 }
 
 // ---------------------------------------------------------------------------
@@ -88,10 +145,12 @@ export default {
       if (!userId) return json({ error: 'Missing userId query parameter' }, { status: 400 });
 
       const callbackUrl = buildCallbackUrl(env.FREEPIECES_PUBLIC_URL, pieceName);
-      const loginUrl = await buildLoginUrl(piece.auth as OAuth2AuthDefinition, {
+      const authDef = piece.auth as OAuth2AuthDefinition;
+      const clientId = (env[authDef.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '';
+      const loginUrl = await buildLoginUrl(authDef, {
         pieceName,
         callbackUrl,
-        clientId: env.OAUTH_CLIENT_ID,
+        clientId,
         encryptionKey: env.TOKEN_ENCRYPTION_KEY,
         userId
       });
@@ -198,6 +257,115 @@ export default {
         console.error(`[freepieces] Action ${pieceName}/${actionName} failed:`, err);
         return json({ ok: false, error: 'Action execution failed' }, { status: 500 });
       }
+    }
+
+    // ── Admin SPA ────────────────────────────────────────────────────────────
+    // Redirect bare /admin → /admin/ so asset-relative paths resolve correctly.
+    if (pathname === '/admin') {
+      return Response.redirect(new URL('/admin/', request.url).toString(), 301);
+    }
+
+    // Serve the React admin SPA shell for all non-API admin paths.
+    if (pathname.startsWith('/admin/') && !pathname.startsWith('/admin/api/')) {
+      if (!env.ASSETS) {
+        return json({ error: 'Admin assets not configured. Run: npm run build:admin' }, { status: 503 });
+      }
+      // Rewrite unknown deep paths to index.html for client-side SPA routing.
+      const assetPath = pathname.startsWith('/admin/assets/')
+        ? pathname
+        : '/admin/index.html';
+      return env.ASSETS.fetch(new Request(new URL(assetPath, request.url).toString(), request));
+    }
+
+    // ── Admin API – unauthenticated ──────────────────────────────────────────
+    if (pathname === '/admin/api/login' && request.method === 'POST') {
+      if (!env.ADMIN_USER || !env.ADMIN_PASSWORD || !env.ADMIN_SIGNING_KEY) {
+        return json({ error: 'Admin credentials not configured' }, { status: 503 });
+      }
+      let body: { username?: string; password?: string };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+      const { username = '', password = '' } = body;
+      const validUser = timingSafeEqual(username, env.ADMIN_USER);
+      const validPass = timingSafeEqual(password, env.ADMIN_PASSWORD);
+      if (!validUser || !validPass) {
+        return json({ error: 'Invalid credentials' }, { status: 401 });
+      }
+      const token = await createSessionToken(username, env.ADMIN_SIGNING_KEY);
+      const isSecure = request.url.startsWith('https://');
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'set-cookie': buildCookie(token, isSecure, 86400)
+        }
+      });
+    }
+
+    if (pathname === '/admin/api/logout' && request.method === 'POST') {
+      const isSecure = request.url.startsWith('https://');
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'set-cookie': buildCookie('', isSecure, 0)
+        }
+      });
+    }
+
+    // ── Admin API – authenticated ────────────────────────────────────────────
+    if (pathname.startsWith('/admin/api/')) {
+      const session = await requireAdminSession(request, env);
+      if (!session) {
+        return json({ error: 'Unauthorized' }, { status: 401 });
+      }
+
+      // GET /admin/api/me
+      if (pathname === '/admin/api/me' && request.method === 'GET') {
+        return json({ username: session.sub });
+      }
+
+      // GET /admin/api/pieces
+      if (pathname === '/admin/api/pieces' && request.method === 'GET') {
+        const all = listPieces();
+        const result = await Promise.all(
+          all.map(async (p) => ({
+            name: p.name,
+            displayName: p.displayName,
+            description: p.description ?? null,
+            version: p.version,
+            auth: p.auth,
+            actions: p.actions.map((a) => ({
+              name: a.name,
+              displayName: a.displayName,
+              description: a.description ?? null
+            })),
+            enabled: await isPieceEnabled(env.TOKEN_STORE, p.name)
+          }))
+        );
+        return json(result);
+      }
+
+      // POST /admin/api/pieces/:name/install  → enable
+      const installMatch = /^\/admin\/api\/pieces\/([^/]+)\/install$/.exec(pathname);
+      if (installMatch && request.method === 'POST') {
+        const name = installMatch[1];
+        if (!getPiece(name)) return json({ error: 'Piece not found' }, { status: 404 });
+        await env.TOKEN_STORE.put(PIECE_FLAG(name), 'true');
+        return json({ ok: true, name, enabled: true });
+      }
+
+      // DELETE /admin/api/pieces/:name  → disable
+      const deleteMatch = /^\/admin\/api\/pieces\/([^/]+)$/.exec(pathname);
+      if (deleteMatch && request.method === 'DELETE') {
+        const name = deleteMatch[1];
+        if (!getPiece(name)) return json({ error: 'Piece not found' }, { status: 404 });
+        await env.TOKEN_STORE.put(PIECE_FLAG(name), 'false');
+        return json({ ok: true, name, enabled: false });
+      }
+
+      return json({ error: 'Not found' }, { status: 404 });
     }
 
     return json({ error: 'Not found' }, { status: 404 });
