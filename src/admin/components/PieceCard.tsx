@@ -13,7 +13,7 @@ import {
 } from '@chakra-ui/react';
 import { type PieceInfo, type SecretGroup, installPiece, uninstallPiece } from '../lib/api';
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, KeyRound } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, KeyRound, Webhook, Zap } from 'lucide-react';
 import { CollapsibleSection } from './ItemSection';
 
 const AUTH_PALETTE: Record<string, string> = {
@@ -71,11 +71,11 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
         onClick={() => setOpen((s) => !s)}
         mb={open ? 2 : 0}
       >
-        <Box flexShrink={0} color="orange.400">
-          <KeyRound size={12} />
-        </Box>
         <Box flexShrink={0}>
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </Box>
+        <Box flexShrink={0} color="orange.400">
+          <KeyRound size={12} />
         </Box>
         <Text fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="wider">
           Secrets
@@ -265,6 +265,8 @@ export function PieceCard({ piece, onToggle }: Props) {
             title="Actions"
             count={piece.actions.length}
             accentColor="blue.400"
+            icon={Zap}
+            pieceName={piece.name}
             items={piece.actions}
           />
         )}
@@ -274,6 +276,8 @@ export function PieceCard({ piece, onToggle }: Props) {
             title="Triggers"
             count={piece.triggers.length}
             accentColor="purple.400"
+            icon={Webhook}
+            pieceName={piece.name}
             badgeKey="type"
             badgePalette="purple"
             items={piece.triggers}
