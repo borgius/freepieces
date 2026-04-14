@@ -112,6 +112,47 @@ export interface PieceAction {
   run(ctx: PieceActionContext): Promise<unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// Trigger context (native pieces)
+// ---------------------------------------------------------------------------
+
+/**
+ * Context passed to each `PieceTrigger.run()` call.
+ *
+ * `lastPollMs` — Unix epoch milliseconds of the last successful poll.
+ *   Callers should persist this across runs (e.g. in KV) and pass it back
+ *   on the next invocation so the trigger only returns new items.
+ *   Pass `0` (or omit) to request the last ~5 items for back-fill / test.
+ */
+export interface PieceTriggerContext {
+  /** Resolved OAuth2 credentials from KV (or bearer token passed at request time). */
+  auth?: Record<string, string>;
+  /** User-supplied filter props for this trigger (e.g. from/to/subject/label). */
+  props?: Record<string, unknown>;
+  /**
+   * Unix epoch ms of the last successful poll.
+   * Triggers use this to build their `after:` query and return only newer items.
+   */
+  lastPollMs?: number;
+  /** Full Cloudflare Workers env (bindings + secrets). */
+  env: Env;
+}
+
+export interface PieceTrigger {
+  name: string;
+  displayName: string;
+  description?: string;
+  /** Trigger strategy tag, e.g. 'POLLING'. Used for display only in native pieces. */
+  type: 'POLLING';
+  /** Named input parameters (filter props). */
+  props?: Record<string, PropDefinition>;
+  /**
+   * Execute the trigger: list new events since `ctx.lastPollMs`.
+   * Returns an array of event objects (empty = nothing new).
+   */
+  run(ctx: PieceTriggerContext): Promise<unknown[]>;
+}
+
 export interface PieceDefinition {
   name: string;
   displayName: string;
@@ -119,6 +160,7 @@ export interface PieceDefinition {
   version: string;
   auth: PieceAuthDefinition;
   actions: PieceAction[];
+  triggers?: PieceTrigger[];
 }
 
 // ---------------------------------------------------------------------------

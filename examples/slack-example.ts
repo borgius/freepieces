@@ -82,7 +82,7 @@
 
 import 'dotenv/config';
 
-const BASE_URL = process.env['FREEPIECES_URL'] ?? 'https://freepieces.example.workers.dev';
+const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
 // ── Bot token auth (CUSTOM_AUTH) ──────────────────────────────────────────────
 // Never expires. Sent directly as Bearer on every request.
 // Worker maps it to: { type: 'CUSTOM_AUTH', props: { botToken: '...' } }
@@ -386,7 +386,7 @@ const CALLBACK_URL = process.env['SLACK_CALLBACK_URL'] ?? '';
  *
  * Prerequisites:
  *   1. Set Slack app → Event Subscriptions → Request URL to:
- *        https://freepieces.example.workers.dev/webhook/slack
+        https://<your-worker>.workers.dev/webhook/slack
  *   2. Subscribe to bot events: message.channels, app_mention, reaction_added
  *   3. Set SLACK_CALLBACK_URL in .env to the HTTPS URL that receives matched events.
  */

@@ -48,7 +48,7 @@ import {
   COOKIE_NAME
 } from './lib/admin-session';
 import './pieces/index.js';
-import type { Env, OAuth2AuthDefinition, ApPiece } from './framework/types';
+import type { Env, OAuth2AuthDefinition, ApPiece, PieceTriggerContext } from './framework/types';
 
 // ---------------------------------------------------------------------------
 // Activepieces context builder
@@ -413,7 +413,7 @@ async function dispatchWebhook(
       let events: unknown[];
       try {
         const trigCtx = buildApTriggerContext(pieceName, piece, auth, sub.propsValue, payload, env);
-        events = await triggerDef.run(trigCtx);
+        events = await (triggerDef as { run(ctx: unknown): Promise<unknown[]> }).run(trigCtx);
       } catch {
         return; // trigger filter threw — skip
       }
@@ -732,11 +732,46 @@ export default {
       const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
       const auth: Record<string, string> | undefined = bearerToken ? { token: bearerToken } : undefined;
 
-      if (stored.kind !== 'ap') {
-        return json({ error: 'Piece does not support AP triggers' }, { status: 400 });
-      }
-
       try {
+        // ── Native piece trigger ────────────────────────────────────────────
+        if (stored.kind === 'native') {
+          const nativeTrigger = stored.def.triggers?.find((t) => t.name === triggerName);
+          if (!nativeTrigger) return json({ error: 'Trigger not found' }, { status: 404 });
+
+          let nativeAuth: Record<string, string> | undefined;
+          if (bearerToken && stored.def.auth.type === 'oauth2') {
+            const storedRecord = env.TOKEN_STORE
+              ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch(() => null)
+              : null;
+            if (storedRecord) {
+              const liveRecord = await refreshTokenIfNeeded(
+                storedRecord, stored.def.auth as OAuth2AuthDefinition, env, pieceName, bearerToken,
+              ).catch(() => storedRecord);
+              nativeAuth = { accessToken: liveRecord.accessToken, ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}) };
+            } else {
+              nativeAuth = { token: bearerToken, accessToken: bearerToken };
+            }
+          } else if (bearerToken) {
+            nativeAuth = { token: bearerToken };
+          }
+
+          const nativeCtx: PieceTriggerContext = {
+            auth: nativeAuth,
+            props: body.propsValue ?? {},
+            lastPollMs: typeof (body as Record<string, unknown>).lastPollMs === 'number'
+              ? (body as Record<string, unknown>).lastPollMs as number
+              : 0,
+            env,
+          };
+          const events = await nativeTrigger.run(nativeCtx);
+          return json({ ok: true, events });
+        }
+
+        // ── AP piece trigger ────────────────────────────────────────────────
+        if (stored.kind !== 'ap') {
+          return json({ error: 'Piece does not support triggers' }, { status: 400 });
+        }
+
         const ctx = buildApTriggerContext(
           pieceName,
           stored.piece,
@@ -745,7 +780,7 @@ export default {
           body.payload ?? {},
           env,
         );
-        const events = await trigger.run(ctx);
+        const events = await (trigger as { run(ctx: unknown): Promise<unknown[]> }).run(ctx);
         return json({ ok: true, events });
       } catch (err) {
         console.error(`[freepieces] Trigger ${pieceName}/${triggerName} failed:`, err);

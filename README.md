@@ -1,108 +1,89 @@
 # freepieces
 
-> A production-ready, MIT-licensed alternative to `@activepieces/pieces-framework` that runs on **Cloudflare Workers** and supports Activepieces-style community nodes.
+> Use all 700+ MIT-licensed community pieces from [Activepieces](https://github.com/activepieces/activepieces/tree/main/packages/pieces/community) on Cloudflare Workers — with a clean MIT framework, OAuth2, and a CLI that installs and deploys them in minutes.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/freepieces)](https://www.npmjs.com/package/freepieces)
 
 ---
 
-## Why freepieces?
+## About
 
-`@activepieces/pieces-framework` is published on npm with a `license: none` metadata field, creating ambiguity for commercial or redistributed projects.  
-`freepieces` ships its **own MIT-licensed framework primitives** so you never depend on ambiguously-licensed code.  
-Community pieces authored in the Activepieces style can be ported with the included **compatibility shims**.
+The [Activepieces community](https://github.com/activepieces/activepieces/tree/main/packages/pieces/community) ships **700+ integration pieces** (Gmail, Slack, GitHub, Notion, Stripe, and hundreds more) as individual MIT-licensed npm packages. **freepieces** gives you a lightweight MIT framework and compatibility shim to run them on Cloudflare Workers — along with a CLI to search, install, and deploy them in minutes.
+
+**Use it when you want:**
+
+- All 700+ Activepieces community pieces without licensing blockers
+- First-class Cloudflare Workers support (KV, Secrets, Web Crypto)
+- A CLI workflow to search, install, and deploy `@activepieces/piece-*` packages
+- An admin UI to manage piece credentials and OAuth tokens
 
 ---
 
-## Architecture
+## Features
 
+- **`fp` CLI** — scaffold a new Worker, search npm for pieces, install and generate wrappers, deploy
+- **Piece framework** — `createPiece()` and `createAction()` builders with full TypeScript types
+- **OAuth2 + API-key auth** — CSRF-protected OAuth flow, AES-256-GCM encrypted token storage in Cloudflare KV
+- **Admin UI** — React SPA for managing pieces, secrets, and OAuth sessions
+- **Activepieces compat shims** — drop-in `createAction`, `PieceAuth`, and `Property` wrappers for porting community pieces
+
+---
+
+## Installation
+
+```bash
+npm install -g freepieces
+# or
+npx freepieces init
 ```
-src/
-├── worker.ts               ← Cloudflare Workers entrypoint (fetch handler)
-├── framework/
-│   ├── types.ts            ← Core types: Env, PieceDefinition, PieceAction, …
-│   ├── piece.ts            ← createPiece() builder
-│   ├── registry.ts         ← registerPiece / getPiece / listPieces
-│   └── auth.ts             ← URL helpers for login / callback routes
-├── lib/
-│   ├── crypto.ts           ← AES-GCM encrypt/decrypt (Web Crypto API)
-│   ├── token-store.ts      ← KV-backed encrypted token storage
-│   └── oauth.ts            ← OAuth2 login URL builder + callback handler
-├── compat/
-│   └── activepieces.ts     ← Shims: createAction, PieceAuth, Property
-├── pieces/
-│   ├── example-oauth.ts    ← Example piece using OAuth2 (GitHub)
-│   └── example-apikey.ts   ← Example piece using API-key auth
-└── client/
-    └── script-client.ts    ← Node.js/Deno script client with predefined token
-```
 
----
+### Requirements
 
-## Storage model & security
-
-| Data type | Where stored | Notes |
-|---|---|---|
-| OAuth client ID / secret | **Cloudflare Secret** | `wrangler secret put OAUTH_CLIENT_ID` |
-| AES-GCM encryption key | **Cloudflare Secret** | `wrangler secret put TOKEN_ENCRYPTION_KEY` |
-| Per-user OAuth tokens | **Cloudflare KV** (encrypted) | Encrypted with AES-256-GCM before write |
-| Static credentials (API keys) | **Cloudflare Secret** or runtime env | Never committed to source |
-
-> **Important:** Cloudflare Secrets are deployment-time values. They are **not** a dynamic database.  
-> Per-user OAuth tokens acquired at runtime are stored **encrypted** in KV (`TOKEN_STORE`), not as Secrets.
-
-### Encryption
-
-- Algorithm: **AES-256-GCM** via the Web Crypto API (available natively in Workers).
-- Key material: 32 random bytes stored as a 64-char hex string in `TOKEN_ENCRYPTION_KEY`.
-- Storage format: `<iv_base64url>:<ciphertext_base64url>` — a fresh random IV per write.
-
-### CSRF / state protection
-
-- OAuth state parameter is a signed opaque blob: `<payload_base64url>.<hmac_sha256_base64url>`.
-- HMAC key is derived from `TOKEN_ENCRYPTION_KEY`.
-- The callback handler rejects any state that fails signature verification.
-
----
-
-## Routes
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Health check |
-| `GET` | `/pieces` | List registered pieces and their actions |
-| `GET` | `/auth/login/:piece?userId=<id>` | Start OAuth2 flow (redirects to provider) |
-| `GET` | `/auth/callback/:piece` | OAuth2 callback — exchanges code, stores token |
-| `POST` | `/run/:piece/:action` | Execute an action (JSON body = props) |
+- Node.js ≥ 20
+- A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier works)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) — installed automatically if missing
 
 ---
 
 ## Quick start
 
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) ≥ 20
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`npm i -g wrangler`)
-
-### Install
-
 ```bash
-npm install
-```
+# Scaffold a new Worker project
+fp init
 
-### Local development
+# Search for available pieces
+fp search gmail
 
-```bash
+# Install a piece and generate a wrapper
+fp install @activepieces/piece-gmail
+
+# Start the local dev worker
 npm run worker:dev
+
+# Deploy to Cloudflare
+fp deploy
 ```
 
-### Type-check
+---
 
-```bash
-npm run check
-```
+## CLI reference
 
-### Deploy to Cloudflare Workers
+| Command | Description |
+|---|---|
+| `fp` / `fp tui` | Interactive piece selector (TUI) |
+| `fp init` | Scaffold a new Worker deployment |
+| `fp search [query]` | Search npm for `@activepieces/piece-*` packages |
+| `fp install <pkg>` | Install a piece and generate a wrapper stub |
+| `fp uninstall [pkg]` | Remove a piece and its wrapper (alias: `fp remove`) |
+| `fp config` | Configure Worker secrets interactively |
+| `fp deploy` | Build admin SPA and deploy to Cloudflare |
+
+Run `fp --help` or `fp <command> --help` for full options.
+
+---
+
+## Deploy to Cloudflare Workers
 
 ```bash
 # 1. Set required secrets
@@ -119,71 +100,78 @@ wrangler kv namespace create TOKEN_STORE
 npm run deploy
 ```
 
+### API routes
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `GET` | `/pieces` | List registered pieces and actions |
+| `GET` | `/auth/login/:piece?userId=<id>` | Start OAuth2 flow |
+| `GET` | `/auth/callback/:piece` | OAuth2 callback, stores token |
+| `POST` | `/run/:piece/:action` | Execute an action (JSON body = props) |
+
 ---
 
 ## Admin UI
 
 The admin console is a React SPA served from `/admin/`.
 
-### First-time setup
-
-Set three Cloudflare Secrets before the first login:
-
 ```bash
-wrangler secret put ADMIN_USER          # choose any username, e.g. "admin"
-wrangler secret put ADMIN_PASSWORD      # choose a strong password
+# Set credentials before first login
+wrangler secret put ADMIN_USER          # e.g. "admin"
+wrangler secret put ADMIN_PASSWORD      # strong password
 wrangler secret put ADMIN_SIGNING_KEY   # openssl rand -hex 32
+
+# Build and deploy
+npm run build:admin && ./deploy.sh
 ```
 
-Then rebuild and redeploy so the SPA is included:
+Then open `https://<your-worker>.workers.dev/admin/` and log in. Sessions last 24 hours.
 
-```bash
-npm run build:admin
-./deploy.sh
-```
+**Local dev:** add the same three variables to `.env`, run `npm run worker:dev`, and open `http://localhost:8787/admin/`.
 
-### Logging in
-
-Open `https://freepieces.example.workers.dev/admin/` in your browser.  
-Enter the `ADMIN_USER` and `ADMIN_PASSWORD` values you set above.  
-A session cookie (`__fp_admin`) is issued and lasts **24 hours**.
-
-### Local development
-
-Add the same three variables to your `.env` file:
-
-```dotenv
-ADMIN_USER=admin
-ADMIN_PASSWORD=changeme
-ADMIN_SIGNING_KEY=<output of: openssl rand -hex 32>
-```
-
-Then start the dev worker:
-
-```bash
-npm run worker:dev
-```
-
-Open `http://localhost:8787/admin/` and log in with the credentials above.
-
-> **Note:** The SPA is served via the Cloudflare ASSETS binding. During `wrangler dev` the
-> assets are read from `dist/public/`, so run `npm run build:admin` at least once before
-> starting the dev server if you haven't already.
+> Run `npm run build:admin` at least once before `wrangler dev` — the SPA is served from `dist/public/` via the ASSETS binding.
 
 ---
 
-## Using the script client
+## Security
 
-```bash
-# Against the local dev worker
-FREEPIECES_URL=http://localhost:8787 \
-FREEPIECES_TOKEN=my-secret-token \
-node --loader ts-node/esm src/client/script-client.ts
-```
+| Data | Storage | Protection |
+|---|---|---|
+| OAuth client ID / secret | Cloudflare Secret | Deployment-time value, never in source |
+| AES-GCM encryption key | Cloudflare Secret | `openssl rand -hex 32` |
+| Per-user OAuth tokens | Cloudflare KV | AES-256-GCM encrypted, fresh random IV per write |
+| Static API keys | Cloudflare Secret or runtime env | Never committed |
+
+OAuth state is a signed blob (`<payload>.<hmac-sha256>`). The callback handler rejects any state that fails HMAC verification.
 
 ---
 
-## Compatibility shims for Activepieces community nodes
+## Writing a piece
+
+### Native freepieces API
+
+```typescript
+import { createPiece, createAction } from 'freepieces/framework';
+
+export const myPiece = createPiece({
+  name: 'my-piece',
+  displayName: 'My Piece',
+  version: '0.1.0',
+  actions: [
+    createAction({
+      name: 'do-something',
+      displayName: 'Do Something',
+      props: {},
+      async run() {
+        return { ok: true };
+      }
+    })
+  ]
+});
+```
+
+### Porting an Activepieces community piece
 
 ```typescript
 import {
@@ -191,7 +179,7 @@ import {
   createAction,
   PieceAuth,
   Property
-} from './src/compat/activepieces';
+} from 'freepieces/compat/activepieces';
 
 export const myPiece = createPiece({
   name: 'my-piece',
@@ -215,6 +203,54 @@ export const myPiece = createPiece({
     })
   ]
 });
+```
+
+---
+
+## Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Type-check all targets
+npm run check
+
+# Start local dev worker
+npm run worker:dev
+
+# Run tests
+npm test
+
+# Build everything
+npm run build
+```
+
+### Project layout
+
+```
+src/
+├── worker.ts          ← Cloudflare Worker entrypoint
+├── framework/         ← createPiece, createAction, registry, auth helpers
+├── lib/               ← AES-GCM crypto, KV token store, OAuth2 flow
+├── compat/            ← Activepieces shims (createAction, PieceAuth, Property)
+├── pieces/            ← Example and bundled pieces
+├── client/            ← Script client (Node.js / Deno)
+├── admin/             ← React admin SPA
+└── cli/               ← fp CLI (commander-based)
+```
+
+---
+
+## Contributing
+
+Contributions are welcome. Open an issue to discuss a change before submitting a PR.
+
+```bash
+git clone https://github.com/borgius/freepieces.git
+cd freepieces
+pnpm install
+npm test
 ```
 
 ---

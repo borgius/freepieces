@@ -1,4 +1,4 @@
-import type { PieceDefinition, PropDefinition, ApPiece, ApTrigger } from './types';
+import type { PieceDefinition, PropDefinition, ApPiece, ApTrigger, PieceTrigger } from './types';
 
 // ---------------------------------------------------------------------------
 // Internal storage — discriminated union so the worker can do the right thing
@@ -216,7 +216,13 @@ export function listPieces(): Array<{
           description: a.description,
           props: a.props,
         })),
-        triggers: [],
+        triggers: (d.triggers ?? []).map((t) => ({
+          name: t.name,
+          displayName: t.displayName,
+          description: t.description,
+          type: t.type,
+          props: t.props,
+        })),
         secrets: deriveSecrets(stored),
       };
     }
@@ -247,11 +253,12 @@ export function listPieces(): Array<{
 }
 
 /**
- * Look up a single AP trigger by piece name + trigger name.
- * Returns undefined for native pieces (they have no AP triggers).
+ * Look up a single trigger by piece name + trigger name.
+ * Works for both AP and native pieces.
  */
-export function getTrigger(pieceName: string, triggerName: string): ApTrigger | undefined {
+export function getTrigger(pieceName: string, triggerName: string): ApTrigger | PieceTrigger | undefined {
   const stored = pieces.get(pieceName);
-  if (!stored || stored.kind !== 'ap') return undefined;
-  return stored.piece._triggers?.[triggerName];
+  if (!stored) return undefined;
+  if (stored.kind === 'ap') return stored.piece._triggers?.[triggerName];
+  return stored.def.triggers?.find((t) => t.name === triggerName);
 }

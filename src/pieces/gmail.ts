@@ -15,7 +15,7 @@
  */
 
 import { createPiece } from '../framework/piece';
-import type { PieceActionContext } from '../framework/types';
+import type { PieceActionContext, PieceTriggerContext } from '../framework/types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -448,13 +448,286 @@ async function customApiCall(ctx: PieceActionContext): Promise<unknown> {
   });
 }
 
+async function getThread(ctx: PieceActionContext): Promise<unknown> {
+  const tok = getToken(ctx.auth);
+  const p = ctx.props as Record<string, unknown>;
+  const format = (p.format as string) ?? 'full';
+  return gmailFetch(tok, `/users/me/threads/${p.thread_id}?format=${format}`);
+}
+
+// ─── Label helpers ────────────────────────────────────────────────────────────
+
+async function fetchLabels(accessToken: string): Promise<Array<{ id: string; name: string }>> {
+  const res = await gmailFetch(accessToken, '/users/me/labels') as { labels: Array<{ id: string; name: string }> };
+  return res.labels ?? [];
+}
+
+// ─── Trigger helpers ──────────────────────────────────────────────────────────
+
+function getTriggerToken(ctx: PieceTriggerContext): string {
+  const t = ctx.auth?.accessToken ?? ctx.auth?.token;
+  if (!t) throw new Error('No access token available');
+  return t;
+}
+
+interface RawMessage {
+  id: string;
+  threadId: string;
+  internalDate?: string;
+  payload?: GmailPart & { headers?: GmailHeader[] };
+  labelIds?: string[];
+  snippet?: string;
+}
+
+async function fetchFullMessage(tok: string, id: string): Promise<RawMessage> {
+  return gmailFetch(tok, `/users/me/messages/${id}?format=full`) as Promise<RawMessage>;
+}
+
+async function fetchRawMessage(tok: string, id: string): Promise<RawMessage & { raw: string }> {
+  return gmailFetch(tok, `/users/me/messages/${id}?format=raw`) as Promise<RawMessage & { raw: string }>;
+}
+
+async function fetchThread(tok: string, threadId: string): Promise<unknown> {
+  return gmailFetch(tok, `/users/me/threads/${threadId}?format=full`);
+}
+
+/** Decode base64url to UTF-8 string */
+function decodeB64(data: string): string {
+  const binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0)));
+}
+
+/** Extract attachments from a MIME part tree */
+interface ParsedAttachment { filename: string; mimeType: string; attachmentId?: string; size: number }
+
+function extractAttachments(part: GmailPart, result: ParsedAttachment[] = []): ParsedAttachment[] {
+  const p = part as GmailPart & { filename?: string; body?: { attachmentId?: string; size?: number; data?: string } };
+  if (p.filename && p.body?.attachmentId) {
+    result.push({ filename: p.filename, mimeType: p.mimeType ?? '', attachmentId: p.body.attachmentId, size: p.body.size ?? 0 });
+  }
+  if (part.parts) for (const sub of part.parts) extractAttachments(sub, result);
+  return result;
+}
+
+function buildMessageOutput(msg: RawMessage): Record<string, unknown> {
+  const headers: GmailHeader[] = (msg.payload as unknown as { headers?: GmailHeader[] })?.headers ?? [];
+  const hm = Object.fromEntries(headers.map(h => [h.name.toLowerCase(), h.value]));
+  const { text, html } = msg.payload ? extractBodyParts(msg.payload) : {};
+  const attachments = msg.payload ? extractAttachments(msg.payload) : [];
+  return {
+    id: msg.id, threadId: msg.threadId, labelIds: msg.labelIds, snippet: msg.snippet,
+    from: hm['from'], to: hm['to'], cc: hm['cc'], bcc: hm['bcc'],
+    subject: hm['subject'], date: hm['date'], messageId: hm['message-id'],
+    replyTo: hm['reply-to'], inReplyTo: hm['in-reply-to'], references: hm['references'],
+    body_text: text, body_html: html,
+    attachments,
+  };
+}
+
+function buildQueryFromProps(p: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if ((p.from as string)?.trim()) parts.push(`from:(${(p.from as string).trim()})`);
+  if ((p.to as string)?.trim()) parts.push(`to:(${(p.to as string).trim()})`);
+  if ((p.subject as string)?.trim()) parts.push(`subject:(${(p.subject as string).trim()})`);
+  if ((p.label as { name: string } | undefined)?.name) parts.push(`label:${(p.label as { name: string }).name}`);
+  if ((p.category as string)?.trim()) parts.push(`category:${(p.category as string).trim()}`);
+  return parts.join(' ');
+}
+
+// ─── Trigger: New Email ───────────────────────────────────────────────────────
+
+async function newEmailTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
+  const tok = getTriggerToken(ctx);
+  const p = ctx.props ?? {};
+  const lastMs = ctx.lastPollMs ?? 0;
+  const maxResults = lastMs === 0 ? 5 : 20;
+  const afterSec = Math.floor(lastMs / 1000);
+
+  const qParts: string[] = [buildQueryFromProps(p)];
+  if (afterSec > 0) qParts.push(`after:${afterSec}`);
+  const q = qParts.filter(Boolean).join(' ');
+
+  const qs = new URLSearchParams({ maxResults: String(maxResults), ...(q ? { q } : {}) });
+  const list = await gmailFetch(tok, `/users/me/messages?${qs}`) as { messages?: Array<{ id: string; threadId: string }> };
+  const messages = (list.messages ?? []).slice().reverse();
+
+  const results: unknown[] = [];
+  for (const { id, threadId } of messages) {
+    try {
+      const msg = await fetchFullMessage(tok, id);
+      if (lastMs > 0 && Number(msg.internalDate) <= lastMs) continue;
+      const thread = await fetchThread(tok, threadId);
+      results.push({ message: buildMessageOutput(msg), thread });
+    } catch { /* skip un-fetchable messages */ }
+  }
+  return results;
+}
+
+// ─── Trigger: New Labeled Email ───────────────────────────────────────────────
+
+interface HistoryResponse {
+  history?: Array<{
+    id?: string | number;
+    labelsAdded?: Array<{ labelIds?: string[]; message?: { id: string; threadId: string } }>;
+    messagesAdded?: Array<{ message?: { id: string; threadId: string; labelIds?: string[] } }>;
+  }>;
+  historyId?: string;
+}
+
+async function newLabeledEmailTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
+  const tok = getTriggerToken(ctx);
+  const p = ctx.props ?? {};
+  const labelId = (p.label as { id: string } | undefined)?.id;
+  const labelName = (p.label as { name: string } | undefined)?.name ?? '';
+  if (!labelId) return [];
+
+  // lastPollMs doubles as the stored historyId epoch — callers should also
+  // persist historyId themselves; we use the profile historyId as seed.
+  const lastHistoryId = p.lastHistoryId as string | undefined;
+  if (!lastHistoryId) {
+    // Seed: return up to 5 recent messages with this label
+    const qs = new URLSearchParams({ labelIds: labelId, maxResults: '5' });
+    const list = await gmailFetch(tok, `/users/me/messages?${qs}`) as { messages?: Array<{ id: string }> };
+    const results: unknown[] = [];
+    for (const { id } of list.messages ?? []) {
+      try {
+        const msg = await fetchFullMessage(tok, id);
+        const thread = await fetchThread(tok, msg.threadId);
+        results.push({ message: buildMessageOutput(msg), thread, labelInfo: { labelId, labelName, addedAt: Date.now() } });
+      } catch { /* skip */ }
+    }
+    return results;
+  }
+
+  const qs = new URLSearchParams({ startHistoryId: lastHistoryId, labelId, historyTypes: 'labelAdded' });
+  qs.append('historyTypes', 'messageAdded');
+  const hist = await gmailFetch(tok, `/users/me/history?${qs}`) as HistoryResponse;
+  const seen = new Map<string, string>();
+
+  for (const h of hist.history ?? []) {
+    for (const la of h.labelsAdded ?? []) {
+      if (la.labelIds?.includes(labelId) && la.message?.id) seen.set(la.message.id, String(h.id ?? ''));
+    }
+    for (const ma of h.messagesAdded ?? []) {
+      if (ma.message?.labelIds?.includes(labelId) && ma.message?.id) seen.set(ma.message.id, String(h.id ?? ''));
+    }
+  }
+
+  const results: unknown[] = [];
+  for (const [msgId] of seen) {
+    try {
+      const msg = await fetchFullMessage(tok, msgId);
+      const thread = await fetchThread(tok, msg.threadId);
+      results.push({ message: buildMessageOutput(msg), thread, labelInfo: { labelId, labelName, addedAt: Date.now() } });
+    } catch { /* skip */ }
+  }
+  return results;
+}
+
+// ─── Trigger: New Attachment ──────────────────────────────────────────────────
+
+async function newAttachmentTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
+  const tok = getTriggerToken(ctx);
+  const p = ctx.props ?? {};
+  const lastMs = ctx.lastPollMs ?? 0;
+  const maxResults = lastMs === 0 ? 5 : 20;
+  const afterSec = Math.floor(lastMs / 1000);
+
+  const qParts = ['has:attachment', buildQueryFromProps(p)];
+  const ext = (p.filenameExtension as string)?.trim();
+  if (ext) qParts.push(`filename:${ext}`);
+  if (afterSec > 0) qParts.push(`after:${afterSec}`);
+  const q = qParts.filter(Boolean).join(' ');
+
+  const qs = new URLSearchParams({ q, maxResults: String(maxResults) });
+  const list = await gmailFetch(tok, `/users/me/messages?${qs}`) as { messages?: Array<{ id: string }> };
+  const messages = (list.messages ?? []).slice().reverse();
+
+  const results: unknown[] = [];
+  for (const { id } of messages) {
+    try {
+      const msg = await fetchFullMessage(tok, id);
+      if (lastMs > 0 && Number(msg.internalDate) <= lastMs) continue;
+      const attachments = msg.payload ? extractAttachments(msg.payload) : [];
+      for (const attachment of attachments) {
+        results.push({ attachment, message: buildMessageOutput(msg) });
+      }
+    } catch { /* skip */ }
+  }
+  return results;
+}
+
+// ─── Trigger: New Conversation ────────────────────────────────────────────────
+
+async function newConversationTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
+  const tok = getTriggerToken(ctx);
+  const p = ctx.props ?? {};
+  const lastHistoryId = p.lastHistoryId as string | undefined;
+
+  if (!lastHistoryId) {
+    // Seed: fetch up to 5 recent INBOX threads
+    const maxAgeHours = (p.maxAgeHours as number) ?? 24;
+    const afterSec = Math.floor((Date.now() - maxAgeHours * 3600 * 1000) / 1000);
+    const qParts = [`after:${afterSec}`];
+    if ((p.from as string)?.trim()) qParts.push(`from:(${(p.from as string).trim()})`);
+    if ((p.subject as string)?.trim()) qParts.push(`subject:(${(p.subject as string).trim()})`);
+    const qs = new URLSearchParams({ q: qParts.join(' '), maxResults: '5' });
+    const list = await gmailFetch(tok, `/users/me/threads?${qs}`) as { threads?: Array<{ id: string }> };
+    const results: unknown[] = [];
+    for (const { id } of list.threads ?? []) {
+      try {
+        const thread = await fetchThread(tok, id) as Record<string, unknown>;
+        results.push({ threadId: id, thread });
+      } catch { /* skip */ }
+    }
+    return results;
+  }
+
+  const qs = new URLSearchParams({ startHistoryId: lastHistoryId, historyTypes: 'messageAdded', maxResults: '100' });
+  const hist = await gmailFetch(tok, `/users/me/history?${qs}`) as HistoryResponse;
+  const newThreads = new Set<string>();
+  const processedThreads = new Set<string>(((p.processedThreadIds as string[]) ?? []));
+
+  for (const h of hist.history ?? []) {
+    for (const ma of h.messagesAdded ?? []) {
+      const threadId = ma.message?.threadId;
+      if (threadId && !processedThreads.has(threadId)) newThreads.add(threadId);
+    }
+  }
+
+  const results: unknown[] = [];
+  for (const threadId of newThreads) {
+    try {
+      const thread = await fetchThread(tok, threadId) as Record<string, unknown>;
+      const msgs = (thread as Record<string, unknown[]>).messages ?? [];
+      if ((msgs as RawMessage[]).length === 1) {
+        // Only 1 message → genuinely new conversation
+        results.push({ threadId, thread });
+      }
+    } catch { /* skip */ }
+  }
+  return results;
+}
+
+// ─── Trigger: New Label ───────────────────────────────────────────────────────
+
+async function newLabelTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
+  const tok = getTriggerToken(ctx);
+  const p = ctx.props ?? {};
+  const knownIds = new Set<string>((p.knownLabelIds as string[]) ?? []);
+
+  const labels = await fetchLabels(tok);
+  if (knownIds.size === 0) return labels; // seed: return all current labels
+  return labels.filter(l => l.id && !knownIds.has(l.id));
+}
+
 // ─── Piece definition ─────────────────────────────────────────────────────────
 
 export const gmailPiece = createPiece({
   name: 'gmail',
   displayName: 'Gmail',
   description: 'Send and manage emails via Gmail OAuth2.',
-  version: '0.1.0',
+  version: '0.2.0',
   auth: {
     type: 'oauth2',
     authorizationUrl: GMAIL_AUTH_URL,
@@ -469,7 +742,45 @@ export const gmailPiece = createPiece({
     { name: 'reply_to_email', displayName: 'Reply to Email', description: 'Reply to an existing email.', run: replyToEmail },
     { name: 'create_draft_reply', displayName: 'Create Draft Reply', description: 'Creates a draft reply to an existing email.', run: createDraftReply },
     { name: 'gmail_get_mail', displayName: 'Get Email', description: 'Get an email via Id.', run: getMail },
+    { name: 'gmail_get_thread', displayName: 'Get Thread', description: 'Get a Gmail thread and all its messages via thread Id.', run: getThread },
     { name: 'gmail_search_mail', displayName: 'Find Email', description: 'Find emails using advanced search criteria.', run: searchMail },
     { name: 'custom_api_call', displayName: 'Custom API Call', description: 'Make a custom authenticated call to the Gmail API.', run: customApiCall },
+  ],
+  triggers: [
+    {
+      name: 'gmail_new_email_received',
+      displayName: 'New Email',
+      description: 'Poll for new emails matching optional from/to/subject/label/category filters.',
+      type: 'POLLING',
+      run: newEmailTriggerRun,
+    },
+    {
+      name: 'new_labeled_email',
+      displayName: 'New Labeled Email',
+      description: 'Poll for emails where a specific label was added (uses Gmail History API).',
+      type: 'POLLING',
+      run: newLabeledEmailTriggerRun,
+    },
+    {
+      name: 'new_attachment',
+      displayName: 'New Attachment',
+      description: 'Poll for emails that contain attachments.',
+      type: 'POLLING',
+      run: newAttachmentTriggerRun,
+    },
+    {
+      name: 'new_conversation',
+      displayName: 'New Conversation',
+      description: 'Poll for newly started email threads (first message in a thread).',
+      type: 'POLLING',
+      run: newConversationTriggerRun,
+    },
+    {
+      name: 'new_label',
+      displayName: 'New Label',
+      description: 'Poll for newly created Gmail labels.',
+      type: 'POLLING',
+      run: newLabelTriggerRun,
+    },
   ],
 });

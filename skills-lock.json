@@ -6,6 +6,11 @@
       "sourceType": "github",
       "computedHash": "9f7a0866bc627b095f738558b594ac4246bda6ff895f1feb78037f8bd98a01d9"
     },
+    "crafting-effective-readmes": {
+      "source": "softaworks/agent-toolkit",
+      "sourceType": "github",
+      "computedHash": "c931a8c22160e8925400778fcb2266b5d1df762f3052edba65f72479f79f2d6c"
+    },
     "nodejs-cli-best-practices": {
       "source": "lirantal/nodejs-cli-apps-best-practices",
       "sourceType": "github",

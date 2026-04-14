@@ -8,17 +8,20 @@
     "fp": "dist/cli/bin.js",
     "freepieces": "dist/cli/bin.js"
   },
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "vite",
     "dev:admin": "vite --config vite.config.admin.ts",
-    "build": "tsc --noEmit && vite build && npm run build:admin && npm run build:cli",
+    "build": "tsc --noEmit && vite build && pnpm run build:admin && pnpm run build:cli",
     "build:admin": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.admin.ts",
     "build:cli": "tsc --project tsconfig.cli.json && chmod +x dist/cli/bin.js",
     "check": "tsc --noEmit && tsc --noEmit --project tsconfig.client.json && tsc --noEmit --project tsconfig.admin.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "worker:dev": "wrangler dev",
-    "deploy": "npm run build:admin && wrangler deploy"
+    "deploy": "pnpm run build:admin && wrangler deploy",
+    "bump": "npm version patch",
+    "release": "pnpm run build && pnpm run bump && npm publish --access public"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260405.0",

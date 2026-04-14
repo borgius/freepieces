@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 # Public URL for building OAuth callback URLs.
 # Value is read from .env (gitignored) via wrangler's ${} interpolation.
-FREEPIECES_PUBLIC_URL = "https://freepieces.example.workers.dev"
+FREEPIECES_PUBLIC_URL = "${FREEPIECES_PUBLIC_URL}"
 
 # KV namespace for encrypted per-user OAuth token storage.
 # TOKEN_STORE_ID is read from .env (gitignored).
