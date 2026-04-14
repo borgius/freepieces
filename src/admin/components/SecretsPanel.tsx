@@ -151,10 +151,14 @@ function PieceSecretsGroup({ piece }: { piece: PieceSecretInfo }) {
 // SecretsPanel — main export
 // ---------------------------------------------------------------------------
 
+
+
 export function SecretsPanel() {
   const [data, setData] = useState<{ global: GlobalSecretDef[]; pieces: PieceSecretInfo[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [showMissing, setShowMissing] = useState(false);
+  const [showRequired, setShowRequired] = useState(false);
 
   const fetchSecrets = useCallback(async () => {
     setLoading(true);
@@ -178,6 +182,22 @@ export function SecretsPanel() {
     0,
   ) ?? 0;
 
+  const matchesFilter = (s: { isSet?: boolean; required: boolean }) => {
+    if (showMissing && s.isSet !== false) return false;
+    if (showRequired && !s.required) return false;
+    return true;
+  };
+
+  const filteredGlobal = data?.global.filter(matchesFilter) ?? [];
+  const filteredPieces = (data?.pieces ?? [])
+    .map((piece) => ({
+      ...piece,
+      groups: piece.groups
+        .map((g) => ({ ...g, secrets: g.secrets.filter(matchesFilter) }))
+        .filter((g) => g.secrets.length > 0),
+    }))
+    .filter((p) => p.groups.length > 0);
+
   return (
     <Box>
       <Flex align="center" justify="space-between" mb={6}>
@@ -191,10 +211,30 @@ export function SecretsPanel() {
             </Text>
           )}
         </Box>
-        <Button size="sm" variant="outline" colorPalette="blue" onClick={fetchSecrets} loading={loading}>
-          <RefreshCw size={14} />
-          Refresh
-        </Button>
+        <HStack gap={2}>
+          <HStack gap={1}>
+            <Button
+              size="xs"
+              variant={showMissing ? 'solid' : 'outline'}
+              colorPalette={showMissing ? 'red' : 'gray'}
+              onClick={() => setShowMissing((v) => !v)}
+            >
+              Missing
+            </Button>
+            <Button
+              size="xs"
+              variant={showRequired ? 'solid' : 'outline'}
+              colorPalette={showRequired ? 'orange' : 'gray'}
+              onClick={() => setShowRequired((v) => !v)}
+            >
+              Required
+            </Button>
+          </HStack>
+          <Button size="sm" variant="outline" colorPalette="blue" onClick={fetchSecrets} loading={loading}>
+            <RefreshCw size={14} />
+            Refresh
+          </Button>
+        </HStack>
       </Flex>
 
       {loading && (
@@ -220,9 +260,10 @@ export function SecretsPanel() {
               )}
             </HStack>
             <VStack align="stretch" gap={2}>
-              {data.global.map((s) => (
-                <SecretRow key={s.key} secret={s} />
-              ))}
+              {filteredGlobal.length > 0
+                ? filteredGlobal.map((s) => <SecretRow key={s.key} secret={s} />)
+                : <Text fontSize="sm" color="gray.400">No secrets match the current filter.</Text>
+              }
             </VStack>
           </Box>
 
@@ -237,11 +278,16 @@ export function SecretsPanel() {
                   <Badge colorPalette="green" variant="subtle">all set</Badge>
                 )}
               </HStack>
-              <VStack align="stretch" gap={6}>
-                {data.pieces.map((piece) => (
-                  <PieceSecretsGroup key={piece.name} piece={piece} />
-                ))}
-              </VStack>
+              {filteredPieces.length > 0
+                ? (
+                  <VStack align="stretch" gap={6}>
+                    {filteredPieces.map((piece) => (
+                      <PieceSecretsGroup key={piece.name} piece={piece} />
+                    ))}
+                  </VStack>
+                )
+                : <Text fontSize="sm" color="gray.400">No secrets match the current filter.</Text>
+              }
             </Box>
           )}
 
