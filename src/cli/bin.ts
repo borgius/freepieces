@@ -58,6 +58,7 @@ program
 Examples:
   fp                              Launch the interactive TUI
   fp search gmail                 Search for Gmail pieces on npm
+  fp codegen                      Regenerate SDK type files
   fp search --json | jq '.[].name'  Pipe results as JSON
   fp install slack                Install the Slack piece
   fp uninstall                    Pick installed pieces to remove
@@ -126,6 +127,14 @@ program
   .action(async () => {
     const { configCommand } = await import('./commands/config.js');
     await configCommand();
+  });
+
+program
+  .command('codegen')
+  .description('Regenerate SDK type files (sdk/generated/index.ts and sdk/index.ts)')
+  .action(async () => {
+    const { codegenCommand } = await import('./commands/codegen.js');
+    await codegenCommand();
   });
 
 program

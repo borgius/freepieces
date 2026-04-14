@@ -2,11 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import ora from 'ora';
 import chalk from 'chalk';
 import { select, isCancel, cancel } from '@clack/prompts';
 import { getNpmPackageInfo, searchNpmPieces, type NpmPackageInfo } from '../util/npm-registry.js';
 import { debug } from '../util/debug.js';
+import { writePieceTypes, generateGeneratedIndex, generateSdkIndex } from '../util/typegen.js';
 
 /** Reject package names that could inject shell arguments (10.1). */
 const VALID_PIECE_RE = /^@activepieces\/piece-[a-z0-9][a-z0-9-]*$/;
@@ -133,6 +136,36 @@ async function installResolved(
     process.exit(1);
   }
 
+  // 3b. Generate types in src/sdk/generated/ from the AP piece's runtime prop structure
+  const sdkGenDir = join(cwd, 'src', 'sdk', 'generated');
+  if (!existsSync(sdkGenDir)) {
+    mkdirSync(sdkGenDir, { recursive: true });
+  }
+  const typesFile = join(sdkGenDir, `npm-${pieceName}.ts`);
+  const s3b = ora(`Generating types src/sdk/generated/npm-${pieceName}.ts…`).start();
+  try {
+    const apExportKey = toPieceSymbol(pieceName);
+    const req = createRequire(join(cwd, 'package.json'));
+    const entryPath = req.resolve(pkg);
+    const mod = await import(pathToFileURL(entryPath).href);
+    const apPiece = mod.default?.[apExportKey] ?? mod[apExportKey] ?? mod.default;
+    if (apPiece && (apPiece._actions || apPiece.actions)) {
+      await writePieceTypes(typesFile, pieceName, apPiece);
+      s3b.succeed(`Types generated: src/sdk/generated/npm-${pieceName}.ts`);
+    } else {
+      s3b.warn('Could not resolve piece object — skipping typegen');
+    }
+
+    // Regenerate the barrel index files so the SDK stays in sync
+    const sdkDir = join(cwd, 'src', 'sdk');
+    await generateGeneratedIndex(sdkGenDir);
+    await generateSdkIndex(sdkDir);
+    debug('install', 'regenerated sdk/generated/index.ts and sdk/index.ts');
+  } catch (err) {
+    s3b.warn(`Typegen failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`);
+    debug('install', `typegen error: ${err}`);
+  }
+
   // 4. Update src/pieces/index.ts marker block if it exists
   const indexPath = join(cwd, 'src', 'pieces', 'index.ts');
   if (existsSync(indexPath)) {
@@ -142,6 +175,7 @@ async function installResolved(
   console.log(
     `\n${chalk.green('✓')} ${chalk.bold(pkg)} installed.\n` +
       `  Wrapper: ${chalk.cyan(`src/pieces/npm-${pieceName}.ts`)}\n` +
+      `  Types:   ${chalk.cyan(`src/sdk/generated/npm-${pieceName}.ts`)}\n` +
       `  Set auth secrets with  wrangler secret put  then run ${chalk.green('fp deploy')}.\n`,
   );
 }
