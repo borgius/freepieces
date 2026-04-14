@@ -1,0 +1,285 @@
+import { useState } from 'react';
+import {
+  Badge,
+  Box,
+  Flex,
+  HStack,
+  Table,
+  Text,
+  VStack
+} from '@chakra-ui/react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import type { PieceAction, PieceTrigger, PropDef } from '../lib/api';
+
+// --------------------------------------------------------------------------
+// Prop type → color
+// --------------------------------------------------------------------------
+
+const PROP_TYPE_PALETTE: Record<string, string> = {
+  SHORT_TEXT: 'blue',
+  LONG_TEXT: 'blue',
+  NUMBER: 'cyan',
+  CHECKBOX: 'teal',
+  SELECT: 'purple',
+  MULTI_SELECT: 'purple',
+  STATIC_SELECT: 'purple',
+  STATIC_MULTI_SELECT: 'purple',
+  OAUTH_DYNAMIC_SELECT: 'orange',
+  DYNAMIC: 'yellow',
+  OBJECT: 'gray',
+  JSON: 'gray',
+  ARRAY: 'gray',
+  FILE: 'pink',
+  DATE_TIME: 'red',
+};
+
+function propPalette(type: string): string {
+  return PROP_TYPE_PALETTE[type] ?? 'gray';
+}
+
+// --------------------------------------------------------------------------
+// PropTable — shows structured params
+// --------------------------------------------------------------------------
+
+function PropTable({ props }: { props: Record<string, PropDef> }) {
+  const entries = Object.entries(props);
+  if (entries.length === 0) return null;
+
+  return (
+    <Box mt={2} borderWidth="1px" borderColor="gray.100" rounded="md" overflow="hidden">
+      <Table.Root size="sm">
+        <Table.Header>
+          <Table.Row bg="gray.50">
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
+              Param
+            </Table.ColumnHeader>
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
+              Type
+            </Table.ColumnHeader>
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3}>
+              Req
+            </Table.ColumnHeader>
+            <Table.ColumnHeader fontSize="xs" fontWeight="semibold" color="gray.500" py={1.5} px={3} hideBelow="md">
+              Description
+            </Table.ColumnHeader>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {entries.map(([key, def]) => (
+            <Table.Row key={key}>
+              <Table.Cell py={1.5} px={3}>
+                <VStack align="start" gap={0}>
+                  <Text fontSize="xs" fontWeight="medium" color="gray.800">
+                    {def.displayName}
+                  </Text>
+                  <Text fontSize="xs" color="gray.400" fontFamily="mono">
+                    {key}
+                  </Text>
+                </VStack>
+              </Table.Cell>
+              <Table.Cell py={1.5} px={3}>
+                <Badge
+                  colorPalette={propPalette(def.type)}
+                  variant="subtle"
+                  fontSize="2xs"
+                  textTransform="none"
+                >
+                  {def.type}
+                </Badge>
+              </Table.Cell>
+              <Table.Cell py={1.5} px={3}>
+                {def.required ? (
+                  <Badge colorPalette="red" variant="subtle" fontSize="2xs">yes</Badge>
+                ) : (
+                  <Text fontSize="xs" color="gray.400">—</Text>
+                )}
+              </Table.Cell>
+              <Table.Cell py={1.5} px={3} hideBelow="md">
+                <Text fontSize="xs" color="gray.500" lineClamp={2}>
+                  {def.description ?? ''}
+                </Text>
+              </Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table.Root>
+    </Box>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Single action / trigger row with expand/collapse
+// --------------------------------------------------------------------------
+
+interface ItemRowProps {
+  name: string;
+  displayName: string;
+  description: string | null;
+  props: Record<string, PropDef> | null;
+  accentColor: string;
+  badge?: string;
+  badgePalette?: string;
+}
+
+function ItemRow({
+  name,
+  displayName,
+  description,
+  props,
+  accentColor,
+  badge,
+  badgePalette = 'gray',
+}: ItemRowProps) {
+  const [open, setOpen] = useState(false);
+  const hasParams = props && Object.keys(props).length > 0;
+
+  return (
+    <Box
+      borderWidth="1px"
+      borderColor="gray.100"
+      rounded="md"
+      overflow="hidden"
+    >
+      {/* Row header — click to expand */}
+      <Flex
+        as="button"
+        w="full"
+        align="center"
+        gap={2}
+        px={3}
+        py={2}
+        bg="white"
+        cursor={hasParams ? 'pointer' : 'default'}
+        _hover={hasParams ? { bg: 'gray.50' } : undefined}
+        onClick={() => hasParams && setOpen((s) => !s)}
+        textAlign="left"
+      >
+        {/* Chevron */}
+        <Box color="gray.400" flexShrink={0} mt={0.5}>
+          {hasParams ? (
+            open ? <ChevronDown size={13} /> : <ChevronRight size={13} />
+          ) : (
+            <Box w="13px" />
+          )}
+        </Box>
+
+        {/* Dot */}
+        <Box w={1.5} h={1.5} bg={accentColor} rounded="full" flexShrink={0} />
+
+        {/* Labels */}
+        <Box flex={1} minW={0}>
+          <HStack gap={2} flexWrap="wrap">
+            <Text fontSize="xs" fontWeight="medium" color="gray.800">
+              {displayName}
+            </Text>
+            <Text fontSize="xs" color="gray.400" fontFamily="mono">
+              {name}
+            </Text>
+            {badge && (
+              <Badge colorPalette={badgePalette} variant="outline" fontSize="2xs">
+                {badge}
+              </Badge>
+            )}
+            {hasParams && (
+              <Badge colorPalette="gray" variant="subtle" fontSize="2xs">
+                {Object.keys(props).length} params
+              </Badge>
+            )}
+          </HStack>
+          {description && (
+            <Text fontSize="xs" color="gray.500" mt={0.5} lineClamp={1}>
+              {description}
+            </Text>
+          )}
+        </Box>
+      </Flex>
+
+      {/* Param table — shown when expanded */}
+      {open && hasParams && (
+        <Box px={3} pb={2}>
+          <PropTable props={props} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// --------------------------------------------------------------------------
+// CollapsibleSection — foldable "Actions" / "Triggers" section
+// --------------------------------------------------------------------------
+
+interface SectionProps {
+  title: string;
+  count: number;
+  accentColor: string;
+  badgeKey?: string;
+  badgePalette?: string;
+  items: Array<PieceAction | PieceTrigger>;
+}
+
+function CollapsibleSection({
+  title,
+  count,
+  accentColor,
+  badgeKey,
+  badgePalette,
+  items,
+}: SectionProps) {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <Box mt={3}>
+      {/* Section header */}
+      <Flex
+        as="button"
+        align="center"
+        gap={1.5}
+        w="full"
+        textAlign="left"
+        cursor="pointer"
+        _hover={{ color: 'gray.700' }}
+        color="gray.500"
+        onClick={() => setOpen((s) => !s)}
+        mb={open ? 2 : 0}
+      >
+        <Box flexShrink={0}>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </Box>
+        <Text
+          fontSize="xs"
+          fontWeight="semibold"
+          textTransform="uppercase"
+          letterSpacing="wider"
+        >
+          {title}
+        </Text>
+        <Badge colorPalette="gray" variant="subtle" fontSize="2xs" ml={1}>
+          {count}
+        </Badge>
+      </Flex>
+
+      {open && (
+        <VStack align="stretch" gap={1}>
+          {items.map((item) => (
+            <ItemRow
+              key={item.name}
+              name={item.name}
+              displayName={item.displayName}
+              description={item.description}
+              props={item.props}
+              accentColor={accentColor}
+              badge={badgeKey ? String((item as unknown as Record<string, unknown>)[badgeKey] ?? '') : undefined}
+              badgePalette={badgePalette}
+            />
+          ))}
+        </VStack>
+      )}
+    </Box>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Public exports
+// --------------------------------------------------------------------------
+
+export { CollapsibleSection };

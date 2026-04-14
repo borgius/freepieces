@@ -5,10 +5,27 @@
  * automatically. The worker validates the cookie on every /admin/api/* call.
  */
 
+export interface PropDef {
+  type: string;
+  displayName: string;
+  description?: string;
+  required?: boolean;
+  defaultValue?: unknown;
+}
+
 export interface PieceAction {
   name: string;
   displayName: string;
   description: string | null;
+  props: Record<string, PropDef> | null;
+}
+
+export interface PieceTrigger {
+  name: string;
+  displayName: string;
+  description: string | null;
+  type: string;
+  props: Record<string, PropDef> | null;
 }
 
 export interface PieceInfo {
@@ -18,6 +35,7 @@ export interface PieceInfo {
   version: string;
   auth: { type: string };
   actions: PieceAction[];
+  triggers: PieceTrigger[];
   enabled: boolean;
 }
 

@@ -28,6 +28,12 @@ export interface Env {
   /** Admin UI password. Set via wrangler secret or .env for local dev. */
   ADMIN_PASSWORD?: string;
   /**
+   * Slack app signing secret (found in Slack app → Basic Information → Signing Secret).
+   * When set, all requests to POST /webhook/slack are verified via X-Slack-Signature.
+   * Store with: wrangler secret put SLACK_SIGNING_SECRET
+   */
+  SLACK_SIGNING_SECRET?: string;
+  /**
    * 64-char hex HMAC signing key for admin session tokens.
    * Generate with:  openssl rand -hex 32
    * Store with:     wrangler secret put ADMIN_SIGNING_KEY
@@ -83,10 +89,26 @@ export interface PieceActionContext {
 // ---------------------------------------------------------------------------
 // Piece + action definitions
 // ---------------------------------------------------------------------------
+
+/**
+ * A single named input property for an action or trigger.
+ * Covers both freepieces native props and the AP Property runtime shape.
+ */
+export interface PropDefinition {
+  /** AP PropertyType string, e.g. 'SHORT_TEXT', 'NUMBER', 'CHECKBOX', 'OAUTH_DYNAMIC_SELECT' */
+  type: string;
+  displayName: string;
+  description?: string;
+  required?: boolean;
+  defaultValue?: unknown;
+}
+
 export interface PieceAction {
   name: string;
   displayName: string;
   description?: string;
+  /** Named input parameters for this action. */
+  props?: Record<string, PropDefinition>;
   run(ctx: PieceActionContext): Promise<unknown>;
 }
 
@@ -97,6 +119,88 @@ export interface PieceDefinition {
   version: string;
   auth: PieceAuthDefinition;
   actions: PieceAction[];
+}
+
+// ---------------------------------------------------------------------------
+// Activepieces native piece support (zero-adapt drop-in)
+// ---------------------------------------------------------------------------
+
+/**
+ * Auth property from @activepieces/pieces-framework as it appears at runtime.
+ * Supports SECRET_TEXT, OAUTH2, CUSTOM_AUTH, BASIC_AUTH auth types.
+ */
+export interface ApPieceAuth {
+  /** AP auth type string, e.g. 'SECRET_TEXT' | 'OAUTH2' | 'CUSTOM_AUTH' | 'BASIC_AUTH' */
+  type: string;
+  displayName?: string;
+  description?: string;
+  /** For CUSTOM_AUTH: named sub-properties (key = propName, value = prop descriptor) */
+  props?: Record<string, {
+    type: string;
+    required?: boolean;
+    description?: string;
+    displayName?: string;
+  }>;
+  /** For OAUTH2: authorization URL */
+  authUrl?: string;
+  /** For OAUTH2: token URL */
+  tokenUrl?: string;
+  /** For OAUTH2: scopes list */
+  scope?: string[];
+}
+
+/**
+ * Minimal shape of an Activepieces Piece class instance as exported by
+ * @activepieces/piece-* community packages.  Use this type to register
+ * community pieces with registerApPiece() — no adapter code needed.
+ */
+export interface ApPiece {
+  displayName: string;
+  description?: string;
+  /** Auth definition(s) — AP allows multiple auth options (e.g. OAuth2 + Bot Token) */
+  auth?: ApPieceAuth | ApPieceAuth[];
+  /**
+   * Actions map keyed by action name.  Private by convention in AP source but
+   * accessible at runtime (the underscore is just a TypeScript visibility marker
+   * on the compiled class, not a true Symbol/WeakMap private slot).
+   */
+  _actions: Record<string, {
+    name: string;
+    displayName: string;
+    description?: string;
+    requireAuth?: boolean;
+    /** Named input props — AP Property descriptor objects keyed by prop name. */
+    props?: Record<string, unknown>;
+    run(context: unknown): Promise<unknown>;
+  }>;
+  /**
+   * Triggers map keyed by trigger name.  Same runtime accessibility note as _actions.
+   */
+  _triggers: Record<string, ApTrigger>;
+}
+
+/**
+ * Minimal shape of an Activepieces Trigger as exported by community pieces.
+ * All three AP strategies (APP_WEBHOOK, WEBHOOK, POLLING) share this interface —
+ * the `run()` call is identical regardless of strategy.
+ */
+export interface ApTrigger {
+  name: string;
+  displayName: string;
+  description?: string;
+  /** AP trigger strategy: 'APP_WEBHOOK' | 'WEBHOOK' | 'POLLING' */
+  type: string;
+  /** Named input props — AP Property descriptor objects keyed by prop name. */
+  props?: Record<string, unknown>;
+  /**
+   * Filter/transform function called when a webhook payload arrives.
+   * Returns an array of matched event objects (empty = no match).
+   */
+  run(context: unknown): Promise<unknown[]>;
+  /** Called once when the trigger is enabled (e.g. to register a webhook). */
+  onEnable?(context: unknown): Promise<void>;
+  /** Called once when the trigger is disabled. */
+  onDisable?(context: unknown): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

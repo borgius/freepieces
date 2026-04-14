@@ -7,7 +7,14 @@
  *   GET  /pieces                             → list registered pieces
  *   GET  /auth/login/:piece?userId=          → start OAuth2 flow
  *   GET  /auth/callback/:piece               → OAuth2 callback (code exchange + KV store)
+ *   POST /auth/tokens/:piece                 → seed access+refresh tokens directly into KV (admin auth)
  *   POST /run/:piece/:action                 → execute an action
+ *   POST /trigger/:piece/:trigger            → run trigger filter (receive webhook payload)
+ *
+ *   POST /webhook/:piece                      → global inbound webhook (Slack Events API Request URL)
+ *   POST /subscriptions/:piece/:trigger        → register a webhook subscription (Bearer auth)
+ *   GET  /subscriptions/:piece                 → list subscriptions for a piece (Bearer auth)
+ *   DELETE /subscriptions/:piece/:trigger/:id  → remove a subscription (Bearer auth)
  *
  *   GET  /admin                              → admin SPA (served from ASSETS binding)
  *   POST /admin/api/login                    → issue admin session cookie
@@ -28,10 +35,10 @@
  *   • Admin sessions                         → HMAC-signed cookie (__fp_admin)
  */
 
-import { registerPiece, listPieces, getPiece } from './framework/registry';
+import { registerPiece, registerApPiece, listPieces, getPiece, getTrigger } from './framework/registry';
 import { buildCallbackUrl } from './framework/auth';
-import { buildLoginUrl, handleCallback } from './lib/oauth';
-import { getToken } from './lib/token-store';
+import { buildLoginUrl, handleCallback, refreshTokenIfNeeded } from './lib/oauth';
+import { getToken, storeToken } from './lib/token-store';
 import {
   createSessionToken,
   verifySessionToken,
@@ -45,7 +52,7 @@ import { exampleApiKeyPiece } from './pieces/example-apikey';
 import { gmailPiece } from './pieces/gmail';
 import { slackPiece } from './pieces/npm-slack.js';
 // @fp:imports:end
-import type { Env, OAuth2AuthDefinition } from './framework/types';
+import type { Env, OAuth2AuthDefinition, ApPiece } from './framework/types';
 
 // ---------------------------------------------------------------------------
 // Register pieces
@@ -54,12 +61,179 @@ import type { Env, OAuth2AuthDefinition } from './framework/types';
 registerPiece(exampleOAuthPiece);
 registerPiece(exampleApiKeyPiece);
 registerPiece(gmailPiece);
-registerPiece(slackPiece);
+registerApPiece('slack', slackPiece);
 // @fp:register:end
 
 // ---------------------------------------------------------------------------
-// JSON response helper
+// Activepieces context builder
 // ---------------------------------------------------------------------------
+
+/**
+ * Build the execution context expected by @activepieces/pieces-framework
+ * action.run() from the freepieces request data.
+ *
+ * Auth mapping by AP auth type:
+ *   SECRET_TEXT  → the raw token string
+ *   CUSTOM_AUTH  → object keyed by prop names, filled from env secrets
+ *                  (env key = PIECENAME_PROPNAME, e.g. SLACK_BOT_TOKEN)
+ *   OAUTH2       → { access_token, ... } from bearer / KV
+ *   BASIC_AUTH   → { username, password } from env (PIECENAME_USERNAME, _PASSWORD)
+ */
+function buildApContext(
+  pieceName: string,
+  piece: ApPiece,
+  auth: Record<string, string> | undefined,
+  props: Record<string, unknown>,
+  env: Env,
+): unknown {
+  const envRecord = env as Record<string, string>;
+  const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
+
+  // Determine which auth type to use.  When auth is an array (multiple options),
+  // prefer CUSTOM_AUTH when reading from env secrets (no bearer token present),
+  // and prefer OAUTH2 when a bearer/access token has been passed in directly.
+  const authDefs: Array<{ type: string; props?: Record<string, unknown> }> =
+    Array.isArray(piece.auth) ? piece.auth : piece.auth ? [piece.auth] : [];
+
+  // When the caller provides a token (via Bearer or KV lookup), OAUTH2 is the
+  // natural fit.  When there is no runtime token, env-based CUSTOM_AUTH props
+  // (e.g. SLACK_BOT_TOKEN) should take priority over an empty OAUTH2 slot.
+  const hasToken = !!(auth?.accessToken || auth?.token);
+  const sortedAuthDefs = hasToken
+    ? authDefs // OAUTH2 wins if it comes first in the piece's auth array
+    : [...authDefs].sort((a, b) => {
+        if (a.type === 'CUSTOM_AUTH') return -1;
+        if (b.type === 'CUSTOM_AUTH') return 1;
+        return 0;
+      });
+
+  let apAuth: unknown = auth?.token ?? '';
+
+  for (const authDef of sortedAuthDefs) {
+    if (authDef.type === 'CUSTOM_AUTH') {
+      // Build the auth object from env secrets, with optional request-time override.
+      // camelCase prop names are converted to SCREAMING_SNAKE_CASE for env lookup
+      // e.g. botToken → SLACK_BOT_TOKEN, apiKey → SLACK_API_KEY
+      const propKeys = Object.keys(authDef.props ?? {});
+      const authProps: Record<string, string> = {};
+      for (const key of propKeys) {
+        const envKey = `${envPrefix}_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
+        authProps[key] =
+          auth?.[key] ??
+          envRecord[envKey] ??
+          '';
+      }
+      // If a Bearer token was supplied and the first prop is the primary token
+      // (e.g. botToken), map it in directly so callers only need SLACK_BOT_TOKEN.
+      if (auth?.token && propKeys.length > 0) {
+        authProps[propKeys[0]] = auth.token;
+      }
+      apAuth = { type: 'CUSTOM_AUTH', props: authProps };
+      break;
+    }
+    if (authDef.type === 'SECRET_TEXT') {
+      apAuth = auth?.token ?? envRecord[`${envPrefix}_TOKEN`] ?? '';
+      break;
+    }
+    if (authDef.type === 'OAUTH2') {
+      const accessToken = auth?.accessToken ?? auth?.token ?? '';
+      apAuth = {
+        type: 'OAUTH2',
+        access_token: accessToken,
+        token_type: 'Bearer',
+        // Populate authed_user so pieces that call requireUserToken() also work.
+        // When the caller only has a user token, it serves as both bot and user token.
+        data: {
+          authed_user: {
+            access_token: auth?.userToken ?? accessToken,
+          },
+        },
+      };
+      break;
+    }
+    if (authDef.type === 'BASIC_AUTH') {
+      apAuth = {
+        username: envRecord[`${envPrefix}_USERNAME`] ?? '',
+        password: envRecord[`${envPrefix}_PASSWORD`] ?? '',
+      };
+      break;
+    }
+  }
+
+  return {
+    auth: apAuth,
+    propsValue: props,
+    store: {
+      get: async () => null,
+      put: async () => undefined,
+      delete: async () => undefined,
+    },
+    files: {
+      write: async () => '',
+    },
+    server: {
+      apiUrl: env.FREEPIECES_PUBLIC_URL ?? '',
+      publicUrl: env.FREEPIECES_PUBLIC_URL ?? '',
+      token: '',
+    },
+    connections: { get: async () => null },
+    project: { id: 'freepieces', externalId: async () => undefined },
+    flows: {
+      list: async () => ({ data: [], next: null, previous: null }),
+      current: { id: 'fp-flow', version: { id: 'fp-flow-version' } },
+    },
+    step: { name: 'fp-step' },
+    tags: { add: async () => undefined },
+    output: { update: async () => undefined },
+    agent: { tools: async () => ({}) },
+    executionType: 'BEGIN',
+    run: {
+      id: 'fp-run',
+      stop: () => undefined,
+      respond: () => undefined,
+      pause: () => undefined,
+      createWaitpoint: async () => ({
+        id: '',
+        resumeUrl: '',
+        buildResumeUrl: () => '',
+      }),
+      waitForWaitpoint: () => undefined,
+    },
+    variables: {},
+    /** @deprecated — kept for older AP actions that still read generateResumeUrl */
+    generateResumeUrl: () => '',
+  };
+}
+
+/**
+ * Build the execution context for an AP trigger's run() call.
+ * Mirrors buildApContext and adds the `payload` and `app` fields expected
+ * by APP_WEBHOOK, WEBHOOK, and POLLING triggers.
+ *
+ * @param payload - The raw incoming webhook body (already parsed from JSON).
+ */
+function buildApTriggerContext(
+  pieceName: string,
+  piece: ApPiece,
+  auth: Record<string, string> | undefined,
+  propsValue: Record<string, unknown>,
+  payload: unknown,
+  env: Env,
+): unknown {
+  const base = buildApContext(pieceName, piece, auth, propsValue, env) as Record<string, unknown>;
+  return {
+    ...base,
+    payload: {
+      body: payload,
+      headers: {},
+      method: 'POST',
+    },
+    app: {
+      /** No-op: freepieces doesn't manage webhook registration lifecycle. */
+      createListeners: () => undefined,
+    },
+  };
+}
 function json(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data, null, 2), {
     ...init,
@@ -76,6 +250,112 @@ function json(data: unknown, init: ResponseInit = {}): Response {
 
 /** KV key prefix for admin piece-enabled flags. */
 const PIECE_FLAG = (name: string) => `__admin:enabled:${name}`;
+
+// ---------------------------------------------------------------------------
+// Webhook subscription helpers
+// ---------------------------------------------------------------------------
+
+/** KV key for a single subscription record. */
+const SUB_KEY = (piece: string, id: string) => `sub:${piece}:${id}`;
+/** KV list prefix for all subscriptions of a piece. */
+const SUB_PREFIX = (piece: string) => `sub:${piece}:`;
+
+interface WebhookSubscription {
+  id: string;
+  trigger: string;
+  propsValue: Record<string, unknown>;
+  /** URL to POST matched events to. Must be HTTPS. */
+  callbackUrl: string;
+  /** Bearer token to use when running the trigger filter. */
+  bearerToken: string | undefined;
+  createdAt: string;
+}
+
+/**
+ * Verify a Slack (or compatible) HMAC-SHA256 request signature.
+ * Rejects requests older than 5 minutes to prevent replay attacks.
+ */
+async function verifySlackSignature(
+  signingSecret: string,
+  rawBody: string,
+  timestamp: string,
+  signature: string,
+): Promise<boolean> {
+  // Reject stale requests
+  const ts = parseInt(timestamp, 10);
+  if (isNaN(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
+
+  const baseStr = `v0:${timestamp}:${rawBody}`;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(signingSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(baseStr));
+  const computed = 'v0=' + Array.from(new Uint8Array(mac))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return timingSafeEqual(computed, signature);
+}
+
+/** Load all subscriptions for a piece from KV. */
+async function listSubscriptions(kv: KVNamespace, piece: string): Promise<WebhookSubscription[]> {
+  const { keys } = await kv.list({ prefix: SUB_PREFIX(piece) });
+  const subs: WebhookSubscription[] = [];
+  for (const key of keys) {
+    const raw = await kv.get(key.name);
+    if (raw) {
+      try { subs.push(JSON.parse(raw) as WebhookSubscription); } catch { /* skip corrupt */ }
+    }
+  }
+  return subs;
+}
+
+/**
+ * Fan-out an inbound webhook payload to all active subscriptions for a piece.
+ * For each subscription, runs the trigger's run() filter and POSTs any matched
+ * events to the subscription's callbackUrl.  Best-effort: individual delivery
+ * failures are logged but do not affect other subscriptions.
+ */
+async function dispatchWebhook(
+  pieceName: string,
+  piece: ApPiece,
+  payload: unknown,
+  env: Env,
+): Promise<void> {
+  const subs = await listSubscriptions(env.TOKEN_STORE, pieceName);
+  await Promise.allSettled(
+    subs.map(async (sub) => {
+      const triggerDef = getTrigger(pieceName, sub.trigger);
+      if (!triggerDef) return;
+
+      const auth: Record<string, string> | undefined = sub.bearerToken
+        ? { token: sub.bearerToken }
+        : undefined;
+
+      let events: unknown[];
+      try {
+        const trigCtx = buildApTriggerContext(pieceName, piece, auth, sub.propsValue, payload, env);
+        events = await triggerDef.run(trigCtx);
+      } catch {
+        return; // trigger filter threw — skip
+      }
+
+      if (events.length === 0) return;
+
+      // POST matched events to the subscriber's callback URL (best-effort)
+      await fetch(sub.callbackUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ piece: pieceName, trigger: sub.trigger, events }),
+      }).catch((err: unknown) => {
+        console.error(`[freepieces] Delivery to ${sub.callbackUrl} failed:`, err);
+      });
+    }),
+  );
+}
 
 /** Returns true when the piece is enabled (default: all bundled pieces are enabled). */
 async function isPieceEnabled(kv: KVNamespace, name: string): Promise<boolean> {
@@ -111,7 +391,7 @@ function buildCookie(token: string, isSecure: boolean, maxAge: number): string {
 // Worker
 // ---------------------------------------------------------------------------
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -133,7 +413,13 @@ export default {
             name: a.name,
             displayName: a.displayName,
             description: a.description
-          }))
+          })),
+          triggers: p.triggers.map((t) => ({
+            name: t.name,
+            displayName: t.displayName,
+            description: t.description,
+            type: t.type,
+          })),
         }))
       );
     }
@@ -141,9 +427,9 @@ export default {
     // ── OAuth2 login start ───────────────────────────────────────────────────
     if (pathname.startsWith('/auth/login/')) {
       const pieceName = pathname.slice('/auth/login/'.length);
-      const piece = getPiece(pieceName);
-      if (!piece) return json({ error: 'Piece not found' }, { status: 404 });
-      if (piece.auth.type !== 'oauth2') {
+      const stored = getPiece(pieceName);
+      if (!stored) return json({ error: 'Piece not found' }, { status: 404 });
+      if (stored.kind !== 'native' || stored.def.auth.type !== 'oauth2') {
         return json({ error: 'Piece does not use OAuth2' }, { status: 400 });
       }
 
@@ -151,7 +437,7 @@ export default {
       if (!userId) return json({ error: 'Missing userId query parameter' }, { status: 400 });
 
       const callbackUrl = buildCallbackUrl(env.FREEPIECES_PUBLIC_URL, pieceName);
-      const authDef = piece.auth as OAuth2AuthDefinition;
+      const authDef = stored.def.auth as OAuth2AuthDefinition;
       const clientId = (env[authDef.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '';
       const loginUrl = await buildLoginUrl(authDef, {
         pieceName,
@@ -167,9 +453,9 @@ export default {
     // ── OAuth2 callback ──────────────────────────────────────────────────────
     if (pathname.startsWith('/auth/callback/')) {
       const pieceName = pathname.slice('/auth/callback/'.length);
-      const piece = getPiece(pieceName);
-      if (!piece) return json({ error: 'Piece not found' }, { status: 404 });
-      if (piece.auth.type !== 'oauth2') {
+      const stored = getPiece(pieceName);
+      if (!stored) return json({ error: 'Piece not found' }, { status: 404 });
+      if (stored.kind !== 'native' || stored.def.auth.type !== 'oauth2') {
         return json({ error: 'Piece does not use OAuth2' }, { status: 400 });
       }
 
@@ -177,7 +463,7 @@ export default {
         const callbackUrl = buildCallbackUrl(env.FREEPIECES_PUBLIC_URL, pieceName);
         const { userId } = await handleCallback(
           url.searchParams,
-          piece.auth as OAuth2AuthDefinition,
+          stored.def.auth as OAuth2AuthDefinition,
           env,
           callbackUrl
         );
@@ -208,44 +494,18 @@ export default {
         return json({ error: 'Expected /run/:piece/:action' }, { status: 400 });
       }
       const [pieceName, actionName] = segments;
-      const piece = getPiece(pieceName);
-      const action = piece?.actions.find((a) => a.name === actionName);
-
-      if (!piece || !action) {
+      const stored = getPiece(pieceName);
+      if (!stored) {
         return json({ error: 'Action not found' }, { status: 404 });
       }
 
-      // Resolve auth
+      // Resolve auth from the Authorization header
       const authHeader = request.headers.get('authorization');
       const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
 
       let auth: Record<string, string> | undefined;
 
-      if (bearerToken) {
-        if (piece.auth.type === 'oauth2') {
-          // Try to load a stored OAuth token; fall back to treating the bearer
-          // value as a raw access token (useful for predefined / script tokens).
-          const storedRecord = env.TOKEN_STORE
-            ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
-                console.error('[freepieces] Failed to retrieve token from KV:', err);
-                return null;
-              })
-            : null;
-
-          if (storedRecord) {
-            auth = {
-              accessToken: storedRecord.accessToken,
-              ...(storedRecord.refreshToken ? { refreshToken: storedRecord.refreshToken } : {}),
-              ...(storedRecord.scope ? { scope: storedRecord.scope } : {})
-            };
-          } else {
-            auth = { token: bearerToken, accessToken: bearerToken };
-          }
-        } else {
-          auth = { token: bearerToken };
-        }
-      }
-
+      // Parse request body
       let props: Record<string, unknown> = {};
       if (request.method === 'POST') {
         try {
@@ -256,12 +516,165 @@ export default {
       }
 
       try {
-        const result = await action.run({ auth, props, env });
+        let result: unknown;
+
+        if (stored.kind === 'native') {
+          // ── Freepieces native piece ─────────────────────────────────────
+          const piece = stored.def;
+          const action = piece.actions.find((a) => a.name === actionName);
+          if (!action) {
+            return json({ error: 'Action not found' }, { status: 404 });
+          }
+
+          if (bearerToken) {
+            if (piece.auth.type === 'oauth2') {
+              const storedRecord = env.TOKEN_STORE
+                ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+                    console.error('[freepieces] Failed to retrieve token from KV:', err);
+                    return null;
+                  })
+                : null;
+
+              if (storedRecord) {
+                // Refresh the token if it's expired or near expiry (15-min window).
+                // Works for Slack token rotation and any piece that uses OAuth2.
+                const liveRecord = await refreshTokenIfNeeded(
+                  storedRecord,
+                  stored.def.auth as OAuth2AuthDefinition,
+                  env,
+                  pieceName,
+                  bearerToken,
+                ).catch((err) => {
+                  console.error('[freepieces] Token refresh error:', err);
+                  return storedRecord;
+                });
+                auth = {
+                  accessToken: liveRecord.accessToken,
+                  ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
+                  ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
+                };
+              } else {
+                auth = { token: bearerToken, accessToken: bearerToken };
+              }
+            } else {
+              auth = { token: bearerToken };
+            }
+          }
+
+          result = await action.run({ auth, props, env });
+
+        } else {
+          // ── Activepieces native piece ───────────────────────────────────
+          const { piece } = stored;
+          const action = piece._actions[actionName];
+          if (!action) {
+            return json({ error: 'Action not found' }, { status: 404 });
+          }
+
+          if (bearerToken) {
+            // Try KV lookup first — bearer token may be a userId key for stored OAuth2 tokens.
+            const storedRecord = env.TOKEN_STORE
+              ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+                  console.error('[freepieces] KV lookup failed for AP piece:', err);
+                  return null;
+                })
+              : null;
+
+            if (storedRecord) {
+              // Attempt token refresh using the AP piece's OAUTH2 auth definition (if any).
+              const authDefs = Array.isArray(piece.auth) ? piece.auth : piece.auth ? [piece.auth] : [];
+              const apOAuth2 = authDefs.find((a) => a.type === 'OAUTH2');
+              let liveRecord = storedRecord;
+              if (apOAuth2?.tokenUrl) {
+                const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
+                const oauth2Def: OAuth2AuthDefinition = {
+                  type: 'oauth2',
+                  authorizationUrl: apOAuth2.authUrl ?? '',
+                  tokenUrl: apOAuth2.tokenUrl,
+                  scopes: apOAuth2.scope ?? [],
+                  clientIdEnvKey: `${envPrefix}_CLIENT_ID`,
+                  clientSecretEnvKey: `${envPrefix}_CLIENT_SECRET`,
+                };
+                liveRecord = await refreshTokenIfNeeded(
+                  storedRecord,
+                  oauth2Def,
+                  env,
+                  pieceName,
+                  bearerToken,
+                ).catch((err) => {
+                  console.error('[freepieces] AP piece token refresh error:', err);
+                  return storedRecord;
+                });
+              }
+              auth = {
+                accessToken: liveRecord.accessToken,
+                token: liveRecord.accessToken,
+                ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
+                ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
+              };
+            } else {
+              auth = { token: bearerToken };
+            }
+          }
+
+          const apCtx = buildApContext(pieceName, piece, auth, props, env);
+          result = await action.run(apCtx);
+        }
+
         return json({ ok: true, result });
       } catch (err) {
         // Log the real error server-side; never expose internal details to callers.
         console.error(`[freepieces] Action ${pieceName}/${actionName} failed:`, err);
         return json({ ok: false, error: 'Action execution failed' }, { status: 500 });
+      }
+    }
+
+    // ── Run trigger (receive webhook payload, invoke trigger filter) ─────────
+    if (pathname.startsWith('/trigger/')) {
+      if (request.method !== 'POST') {
+        return json({ error: 'Method not allowed' }, { status: 405 });
+      }
+      const segments = pathname.slice('/trigger/'.length).split('/');
+      if (segments.length < 2) {
+        return json({ error: 'Expected /trigger/:piece/:trigger' }, { status: 400 });
+      }
+      const [pieceName, triggerName] = segments;
+
+      const stored = getPiece(pieceName);
+      if (!stored) return json({ error: 'Piece not found' }, { status: 404 });
+
+      const trigger = getTrigger(pieceName, triggerName);
+      if (!trigger) return json({ error: 'Trigger not found' }, { status: 404 });
+
+      let body: { payload?: unknown; propsValue?: Record<string, unknown> } = {};
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+
+      const authHeader = request.headers.get('authorization');
+      const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+      const auth: Record<string, string> | undefined = bearerToken ? { token: bearerToken } : undefined;
+
+      if (stored.kind !== 'ap') {
+        return json({ error: 'Piece does not support AP triggers' }, { status: 400 });
+      }
+
+      try {
+        const ctx = buildApTriggerContext(
+          pieceName,
+          stored.piece,
+          auth,
+          body.propsValue ?? {},
+          body.payload ?? {},
+          env,
+        );
+        const events = await trigger.run(ctx);
+        return json({ ok: true, events });
+      } catch (err) {
+        console.error(`[freepieces] Trigger ${pieceName}/${triggerName} failed:`, err);
+        return json({ ok: false, error: 'Trigger execution failed' }, { status: 500 });
       }
     }
 
@@ -345,7 +758,15 @@ export default {
             actions: p.actions.map((a) => ({
               name: a.name,
               displayName: a.displayName,
-              description: a.description ?? null
+              description: a.description ?? null,
+              props: a.props ?? null,
+            })),
+            triggers: p.triggers.map((t) => ({
+              name: t.name,
+              displayName: t.displayName,
+              description: t.description ?? null,
+              type: t.type,
+              props: t.props ?? null,
             })),
             enabled: await isPieceEnabled(env.TOKEN_STORE, p.name)
           }))
@@ -372,6 +793,220 @@ export default {
       }
 
       return json({ error: 'Not found' }, { status: 404 });
+    }
+
+    // ── Seed tokens (admin-protected) ───────────────────────────────────────
+    // POST /auth/tokens/:piece
+    // Body: { userId, accessToken, refreshToken?, expiresIn? }
+    //
+    // Use this to store an OAuth2 access+refresh pair directly into KV without
+    // going through the browser OAuth flow.  Requires admin credentials via
+    // Basic auth (Authorization: Basic base64(user:pass)).
+    //
+    // Example (from slack-example.ts --seed-tokens):
+    //   curl -u admin:password -X POST /auth/tokens/slack \
+    //     -d '{ "userId": "alice", "accessToken": "xoxe-...", "refreshToken": "xoxe-r-...", "expiresIn": 43200 }'
+    //
+    // After seeding, use "Bearer alice" in subsequent /run calls to look up
+    // the stored token.
+    if (pathname.startsWith('/auth/tokens/') && request.method === 'POST') {
+      // Require Basic auth — same user/pass as admin panel.
+      if (!env.ADMIN_USER || !env.ADMIN_PASSWORD) {
+        return json({ error: 'Admin credentials not configured' }, { status: 503 });
+      }
+      const authHeader = request.headers.get('authorization') ?? '';
+      let authed = false;
+      if (authHeader.startsWith('Basic ')) {
+        const decoded = atob(authHeader.slice(6));
+        const colonIdx = decoded.indexOf(':');
+        if (colonIdx > 0) {
+          const user = decoded.slice(0, colonIdx);
+          const pass = decoded.slice(colonIdx + 1);
+          authed = timingSafeEqual(user, env.ADMIN_USER) && timingSafeEqual(pass, env.ADMIN_PASSWORD);
+        }
+      }
+      if (!authed) return json({ error: 'Unauthorized' }, { status: 401 });
+
+      const pieceName = pathname.slice('/auth/tokens/'.length);
+      if (!getPiece(pieceName)) return json({ error: 'Piece not found' }, { status: 404 });
+
+      let body: { userId?: string; accessToken?: string; refreshToken?: string; expiresIn?: number };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+      const { userId, accessToken, refreshToken, expiresIn } = body;
+      if (!userId || !accessToken) {
+        return json({ error: 'Missing required fields: userId, accessToken' }, { status: 400 });
+      }
+
+      const record: import('./framework/types').OAuthTokenRecord = {
+        accessToken,
+        refreshToken,
+        expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
+        tokenType: 'Bearer',
+      };
+      await storeToken(env.TOKEN_STORE, pieceName, userId, record, env.TOKEN_ENCRYPTION_KEY);
+      return json({ ok: true, piece: pieceName, userId });
+    }
+
+    // ── Inbound webhook (Slack Events API Request URL and equivalents) ────────
+    //
+    // Point Slack → Event Subscriptions → Request URL to:
+    //   https://freepieces.example.workers.dev/webhook/slack
+    //
+    // Handles:
+    //   • Slack URL verification challenge (responds synchronously)
+    //   • Slack request signature verification (when SLACK_SIGNING_SECRET is set)
+    //   • Fan-out to all registered subscriptions via ctx.waitUntil()
+    //
+    const webhookMatch = /^\/webhook\/([^/]+)$/.exec(pathname);
+    if (webhookMatch && request.method === 'POST') {
+      const pieceName = decodeURIComponent(webhookMatch[1]);
+      const stored = getPiece(pieceName);
+      if (!stored || stored.kind !== 'ap') {
+        return json({ error: 'Piece not found or not an AP piece' }, { status: 404 });
+      }
+      const { piece } = stored;
+
+      // Read raw body text before parsing (needed for HMAC verification)
+      const rawBody = await request.text();
+
+      // Verify Slack signature when the signing secret is configured
+      const envRecord2 = env as Record<string, string>;
+      const signingSecretKey = `${pieceName.toUpperCase().replace(/-/g, '_')}_SIGNING_SECRET`;
+      const signingSecret = envRecord2[signingSecretKey] as string | undefined;
+      if (signingSecret) {
+        const timestamp = request.headers.get('x-slack-request-timestamp') ?? '';
+        const signature = request.headers.get('x-slack-signature') ?? '';
+        const valid = await verifySlackSignature(signingSecret, rawBody, timestamp, signature);
+        if (!valid) {
+          return json({ error: 'Invalid signature' }, { status: 401 });
+        }
+      }
+
+      let webhookBody: Record<string, unknown>;
+      try {
+        webhookBody = JSON.parse(rawBody) as Record<string, unknown>;
+      } catch {
+        return json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+
+      // Slack URL verification — must reply synchronously with the challenge value
+      if (webhookBody['type'] === 'url_verification') {
+        return json({ challenge: webhookBody['challenge'] });
+      }
+
+      // Fan out asynchronously so we can return 200 within Slack's 3-second window
+      ctx.waitUntil(
+        dispatchWebhook(pieceName, piece, webhookBody, env).catch((err: unknown) =>
+          console.error('[freepieces] dispatchWebhook error:', err),
+        ),
+      );
+      return new Response('OK', { status: 200 });
+    }
+
+    // ── Webhook subscriptions ─────────────────────────────────────────────────
+
+    // POST /subscriptions/:piece/:trigger
+    //   Body: { callbackUrl: string, propsValue?: Record<string,unknown> }
+    //   Auth: Bearer <token>   (stored with the subscription for future trigger dispatch)
+    //   Returns: { ok, id, webhookUrl }
+    const subCreateMatch = /^\/subscriptions\/([^/]+)\/([^/]+)$/.exec(pathname);
+    if (subCreateMatch && request.method === 'POST') {
+      const pieceName = decodeURIComponent(subCreateMatch[1]);
+      const triggerName = decodeURIComponent(subCreateMatch[2]);
+
+      const stored = getPiece(pieceName);
+      if (!stored || stored.kind !== 'ap') {
+        return json({ error: 'Piece not found or not an AP piece' }, { status: 404 });
+      }
+      if (!getTrigger(pieceName, triggerName)) {
+        return json({ error: 'Trigger not found' }, { status: 404 });
+      }
+
+      const subAuthHeader = request.headers.get('authorization');
+      const subBearerToken = subAuthHeader?.startsWith('Bearer ') ? subAuthHeader.slice(7) : undefined;
+
+      let subBody: { callbackUrl?: string; propsValue?: Record<string, unknown> };
+      try {
+        subBody = (await request.json()) as typeof subBody;
+      } catch {
+        return json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+
+      const { callbackUrl, propsValue = {} } = subBody;
+      if (!callbackUrl) {
+        return json({ error: 'Missing required field: callbackUrl' }, { status: 400 });
+      }
+      // Require HTTPS to mitigate SSRF to non-TLS endpoints
+      try {
+        const parsed = new URL(callbackUrl);
+        if (parsed.protocol !== 'https:') throw new Error();
+      } catch {
+        return json({ error: 'callbackUrl must be a valid HTTPS URL' }, { status: 400 });
+      }
+
+      const subId = crypto.randomUUID();
+      const sub: WebhookSubscription = {
+        id: subId,
+        trigger: triggerName,
+        propsValue,
+        callbackUrl,
+        bearerToken: subBearerToken,
+        createdAt: new Date().toISOString(),
+      };
+      await env.TOKEN_STORE.put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
+
+      const webhookUrl = `${env.FREEPIECES_PUBLIC_URL}/webhook/${pieceName}`;
+      return json({ ok: true, id: subId, webhookUrl }, { status: 201 });
+    }
+
+    // GET /subscriptions/:piece
+    //   Auth: Bearer <token>  (returns only subscriptions associated with this token)
+    const subListMatch = /^\/subscriptions\/([^/]+)$/.exec(pathname);
+    if (subListMatch && request.method === 'GET') {
+      const pieceName = decodeURIComponent(subListMatch[1]);
+
+      const listAuthHeader = request.headers.get('authorization');
+      const listBearer = listAuthHeader?.startsWith('Bearer ') ? listAuthHeader.slice(7) : undefined;
+      if (!listBearer) return json({ error: 'Bearer token required' }, { status: 401 });
+
+      const allSubs = await listSubscriptions(env.TOKEN_STORE, pieceName);
+      const mine = allSubs
+        .filter((s) => s.bearerToken === listBearer)
+        .map((s) => ({
+          id: s.id,
+          trigger: s.trigger,
+          propsValue: s.propsValue,
+          callbackUrl: s.callbackUrl,
+          createdAt: s.createdAt,
+        }));
+      return json({ ok: true, subscriptions: mine });
+    }
+
+    // DELETE /subscriptions/:piece/:trigger/:id
+    //   Auth: Bearer <token>  (must match the token used to create the subscription)
+    const subDeleteMatch = /^\/subscriptions\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(pathname);
+    if (subDeleteMatch && request.method === 'DELETE') {
+      const pieceName = decodeURIComponent(subDeleteMatch[1]);
+      const subDelId = decodeURIComponent(subDeleteMatch[3]);
+
+      const delAuthHeader = request.headers.get('authorization');
+      const delBearer = delAuthHeader?.startsWith('Bearer ') ? delAuthHeader.slice(7) : undefined;
+      if (!delBearer) return json({ error: 'Bearer token required' }, { status: 401 });
+
+      const rawSub = await env.TOKEN_STORE.get(SUB_KEY(pieceName, subDelId));
+      if (!rawSub) return json({ error: 'Subscription not found' }, { status: 404 });
+
+      const existingSub = JSON.parse(rawSub) as WebhookSubscription;
+      if (existingSub.bearerToken !== delBearer) {
+        return json({ error: 'Forbidden' }, { status: 403 });
+      }
+
+      await env.TOKEN_STORE.delete(SUB_KEY(pieceName, subDelId));
+      return json({ ok: true, id: subDelId });
     }
 
     return json({ error: 'Not found' }, { status: 404 });

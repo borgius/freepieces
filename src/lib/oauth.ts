@@ -190,3 +190,71 @@ export async function handleCallback(
 
   return { userId: state.userId, record };
 }
+
+// ---------------------------------------------------------------------------
+// Token refresh
+// ---------------------------------------------------------------------------
+
+/** Refresh threshold: refresh if token expires within 15 minutes. */
+const REFRESH_THRESHOLD_MS = 15 * 60 * 1000;
+
+/**
+ * If the stored token is expired (or within 15 minutes of expiry) and has a
+ * refresh_token, exchange it for a new access token, persist the updated
+ * record to KV, and return the fresh record.
+ *
+ * Returns the original record unchanged when:
+ *   • no expiresAt is stored (non-expiring token, e.g. plain bot token)
+ *   • token is still valid and not near expiry
+ *   • no refresh_token is present (token is simply gone — caller must re-auth)
+ */
+export async function refreshTokenIfNeeded(
+  record: OAuthTokenRecord,
+  auth: OAuth2AuthDefinition,
+  env: Env,
+  pieceName: string,
+  userId: string
+): Promise<OAuthTokenRecord> {
+  if (!record.expiresAt) return record;                              // non-expiring
+  if (Date.now() + REFRESH_THRESHOLD_MS < record.expiresAt) return record; // still fresh
+  if (!record.refreshToken) return record;                           // can't refresh
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: record.refreshToken,
+    client_id: (env[auth.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '',
+    client_secret: (env[auth.clientSecretEnvKey ?? 'OAUTH_CLIENT_SECRET'] as string) ?? '',
+  });
+
+  const resp = await fetch(auth.tokenUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+    body: body.toString(),
+  });
+
+  if (!resp.ok) {
+    // Log but don't throw — let the caller attempt to use the old token.
+    console.error(`[freepieces] Token refresh for ${pieceName}/${userId} failed (${resp.status})`);
+    return record;
+  }
+
+  const data = (await resp.json()) as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+    token_type?: string;
+  };
+
+  const fresh: OAuthTokenRecord = {
+    accessToken: data.access_token,
+    // Slack may not rotate the refresh token — keep the old one if absent.
+    refreshToken: data.refresh_token ?? record.refreshToken,
+    expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
+    scope: data.scope ?? record.scope,
+    tokenType: data.token_type ?? record.tokenType ?? 'Bearer',
+  };
+
+  await storeToken(env.TOKEN_STORE, pieceName, userId, fresh, env.TOKEN_ENCRYPTION_KEY);
+  return fresh;
+}

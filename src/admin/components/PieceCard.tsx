@@ -1,18 +1,35 @@
 import { Badge, Box, Button, Card, Flex, HStack, Text, VStack } from '@chakra-ui/react';
 import { type PieceInfo, installPiece, uninstallPiece } from '../lib/api';
 import { useState } from 'react';
+import { CollapsibleSection } from './ItemSection';
 
 const AUTH_PALETTE: Record<string, string> = {
   oauth2: 'purple',
   apiKey: 'orange',
-  none: 'gray'
+  SECRET_TEXT: 'orange',
+  CUSTOM_AUTH: 'yellow',
+  OAUTH2: 'purple',
+  BASIC_AUTH: 'teal',
+  none: 'gray',
 };
 
 const AUTH_LABEL: Record<string, string> = {
   oauth2: 'OAuth2',
   apiKey: 'API Key',
-  none: 'No Auth'
+  SECRET_TEXT: 'Secret Key',
+  CUSTOM_AUTH: 'Custom Auth',
+  OAUTH2: 'OAuth2',
+  BASIC_AUTH: 'Basic Auth',
+  none: 'No Auth',
 };
+
+function authLabel(type: string): string {
+  return AUTH_LABEL[type] ?? type;
+}
+
+function authPalette(type: string): string {
+  return AUTH_PALETTE[type] ?? 'gray';
+}
 
 interface Props {
   piece: PieceInfo;
@@ -22,6 +39,11 @@ interface Props {
 export function PieceCard({ piece, onToggle }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const authType =
+    Array.isArray(piece.auth)
+      ? (piece.auth as Array<{ type: string }>).map((a) => a.type).join(' / ')
+      : (piece.auth as { type: string } | undefined)?.type ?? '?';
 
   async function handleToggle() {
     setError('');
@@ -69,8 +91,8 @@ export function PieceCard({ piece, onToggle }: Props) {
         </Flex>
 
         <HStack gap={2} mt={2} flexWrap="wrap">
-          <Badge colorPalette={AUTH_PALETTE[piece.auth.type] ?? 'gray'} variant="outline" fontSize="xs">
-            {AUTH_LABEL[piece.auth.type] ?? piece.auth.type}
+          <Badge colorPalette={authPalette(authType)} variant="outline" fontSize="xs">
+            {authLabel(authType)}
           </Badge>
           <Badge colorPalette="blue" variant="outline" fontSize="xs">
             v{piece.version}
@@ -84,26 +106,23 @@ export function PieceCard({ piece, onToggle }: Props) {
         </Text>
 
         {piece.actions.length > 0 && (
-          <VStack align="stretch" gap={1} mt={3}>
-            <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider">
-              Actions ({piece.actions.length})
-            </Text>
-            {piece.actions.map((action) => (
-              <HStack key={action.name} gap={2}>
-                <Box
-                  w={1.5}
-                  h={1.5}
-                  bg="blue.400"
-                  rounded="full"
-                  flexShrink={0}
-                  mt={0.5}
-                />
-                <Text fontSize="xs" color="gray.700">
-                  {action.displayName}
-                </Text>
-              </HStack>
-            ))}
-          </VStack>
+          <CollapsibleSection
+            title="Actions"
+            count={piece.actions.length}
+            accentColor="blue.400"
+            items={piece.actions}
+          />
+        )}
+
+        {piece.triggers.length > 0 && (
+          <CollapsibleSection
+            title="Triggers"
+            count={piece.triggers.length}
+            accentColor="purple.400"
+            badgeKey="type"
+            badgePalette="purple"
+            items={piece.triggers}
+          />
         )}
       </Card.Body>
 
@@ -129,3 +148,4 @@ export function PieceCard({ piece, onToggle }: Props) {
     </Card.Root>
   );
 }
+
