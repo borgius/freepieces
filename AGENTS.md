@@ -34,6 +34,15 @@ Run the relevant checks after edits:
 
 If auth, headers, or route behavior changed, add or update targeted unit tests instead of relying on manual testing alone.
 
+## No personal data in source files
+
+Never hardcode personal identifiers in source files, examples, config, or comments:
+
+- **No** real email addresses, user IDs, Cloudflare subdomains, KV namespace IDs, or any other PI
+- Always use `.env` variable references (e.g. `process.env['USER_ID']`, `${TOKEN_STORE_ID}`) in code and config
+- Use generic placeholders in examples (e.g. `your-user-id`, `your@email.com`, `<your-worker>.workers.dev`)
+- `.env` is gitignored — real values live there only and are never committed
+
 ## Final simplification pass
 
 Before ending any task that changes code:
