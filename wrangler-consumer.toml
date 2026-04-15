@@ -1,0 +1,9 @@
+name = "freepieces-queue-consumer"
+main = "examples/queue-consumer.ts"
+compatibility_date = "2026-04-14"
+compatibility_flags = ["nodejs_compat"]
+
+[[queues.consumers]]
+queue = "slack-new-message"
+max_batch_size = 10
+max_batch_timeout = 5
