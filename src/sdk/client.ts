@@ -2,7 +2,7 @@
 // freepieces SDK — FreePiecesClient
 // ---------------------------------------------------------------------------
 
-import type { FreePiecesClientOptions, PieceSummary, ActionResult } from './types.js';
+import type { FreePiecesClientOptions, PieceSummary, ActionResult, TriggerResult } from './types.js';
 import { FreePiecesError } from './types.js';
 import type { KnownPieces } from './generated/index.js';
 import { knownPieceNames } from './generated/index.js';
@@ -166,6 +166,22 @@ export class FreePiecesClient {
    */
   async listPieces(): Promise<PieceSummary[]> {
     return this.request<PieceSummary[]>('GET', '/pieces');
+  }
+
+  /**
+   * Invoke a trigger directly (synchronous). Useful for polling triggers and
+   * for testing webhook/queue trigger filters.
+   *
+   * @param piece       - Piece name (e.g. `'gmail'`)
+   * @param trigger     - Trigger name (e.g. `'gmail_new_email_received'`)
+   * @param body        - Trigger body: `{ propsValue?, lastPollMs?, payload? }`
+   */
+  async trigger<T = unknown>(
+    piece: string,
+    trigger: string,
+    body: { propsValue?: Record<string, unknown>; lastPollMs?: number; payload?: unknown } = {},
+  ): Promise<TriggerResult<T>> {
+    return this.request<TriggerResult<T>>('POST', `/trigger/${piece}/${trigger}`, body);
   }
 
   /**

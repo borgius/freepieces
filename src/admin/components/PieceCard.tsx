@@ -412,6 +412,7 @@ export function PieceCard({ piece, onToggle }: Props) {
             icon={Zap}
             pieceName={piece.name}
             items={piece.actions}
+            kind="action"
           />
         )}
 
@@ -425,6 +426,7 @@ export function PieceCard({ piece, onToggle }: Props) {
             badgeKey="type"
             badgePalette="purple"
             items={piece.triggers}
+            kind="trigger"
           />
         )}
 

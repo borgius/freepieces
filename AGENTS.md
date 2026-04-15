@@ -33,3 +33,12 @@ Run the relevant checks after edits:
 - `npm run check`
 
 If auth, headers, or route behavior changed, add or update targeted unit tests instead of relying on manual testing alone.
+
+## Final simplification pass
+
+Before ending any task that changes code:
+
+- Run the `code-simplifier` skill (`.agents/skills/code-simplifier/SKILL.md`)
+- Review only the files touched in the current session
+- Apply safe readability and maintainability refactors that preserve behavior exactly
+- If the simplification pass changes code, re-run any affected validation before finishing

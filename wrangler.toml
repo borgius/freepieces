@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 # Public URL for building OAuth callback URLs.
 # Value is read from .env (gitignored) via wrangler's ${} interpolation.
-FREEPIECES_PUBLIC_URL = "${FREEPIECES_PUBLIC_URL}"
+FREEPIECES_PUBLIC_URL = "https://freepieces.example.workers.dev"
 
 # KV namespace for encrypted per-user OAuth token storage.
 # TOKEN_STORE_ID is read from .env (gitignored).
@@ -36,10 +36,18 @@ binding = "ASSETS"
 #   wrangler secret put ADMIN_PASSWORD
 #   wrangler secret put ADMIN_SIGNING_KEY      # 32 random hex bytes → openssl rand -hex 32
 #
-# Run-endpoint API key — gates /run, /trigger, and /subscriptions (optional but recommended):
-#   wrangler secret put RUN_API_KEY            # 32 random hex bytes → openssl rand -hex 32
-# Convention: prefix value with fp_sk_ so it is recognisable in logs (e.g. fp_sk_<hex32>).
-# When set, callers must send:
+# Runtime API key (recommended):
+#   wrangler secret put RUN_API_KEY            # prefix with fp_sk_, e.g. fp_sk_<hex32>
+# When set, runtime callers use:
 #   Authorization: Bearer <RUN_API_KEY>
-#   X-User-Id: <userId>               ← userId for OAuth2 KV lookups
-#   X-Piece-Token: <token>            ← direct API key / bot token / access token
+#   X-User-Id: <userId>
+#   X-Piece-Token: <token>
+
+# ── Queue delivery for subscriptions ──────────────────────────────────────────
+# To deliver webhook subscription events to a Cloudflare Queue instead of an
+# HTTP callback, add a [[queues.producers]] entry for each target queue.
+# Binding naming convention: QUEUE_<UPPER_SNAKE_CASE_OF_QUEUE_NAME>
+#
+# [[queues.producers]]
+# queue = "slack-new-message"
+# binding = "QUEUE_SLACK_NEW_MESSAGE"

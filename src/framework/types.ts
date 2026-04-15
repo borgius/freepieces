@@ -8,6 +8,9 @@ export interface Env {
   /** KV namespace for encrypted per-user OAuth tokens and admin state. Bind in wrangler.toml. */
   TOKEN_STORE: KVNamespace;
 
+  /** Cloudflare Queue for async trigger processing. Bind in wrangler.toml as [[queues.producers]]. */
+  TRIGGER_QUEUE?: Queue;
+
   /** Static-assets binding for the admin SPA. Configured via [assets] in wrangler.toml. */
   ASSETS?: Fetcher;
 

@@ -133,6 +133,43 @@ Use `X-User-Id` for OAuth2 pieces such as Gmail. Use `X-Piece-Token` for direct 
 
 In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback for both modes. The SDK and examples also send `X-User-Id` / `X-Piece-Token` when available so local and deployed behavior stay aligned.
 
+### Queue delivery for subscriptions
+
+Webhook subscriptions can deliver matched events to a **Cloudflare Queue** instead of an HTTPS callback URL. This keeps event processing inside the Cloudflare network with no public endpoint required on the consumer side.
+
+**1. Create the queue and add a producer binding to `wrangler.toml`:**
+
+```toml
+[[queues.producers]]
+queue = "slack-new-message"
+binding = "QUEUE_SLACK_NEW_MESSAGE"
+```
+
+Binding naming convention: `QUEUE_` + queue name in UPPER_SNAKE_CASE (hyphens become underscores).
+
+**2. Create a subscription with `queueName` instead of `callbackUrl`:**
+
+```bash
+curl "https://freepieces.example.workers.dev/subscriptions/npm-slack/new_message" \
+  -X POST \
+  -H "Authorization: Bearer $FREEPIECES_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queueName": "slack-new-message",
+    "propsValue": { "channel": "C0123456789" }
+  }'
+```
+
+Matched events are sent to the queue as JSON with the same shape as the HTTP delivery payload:
+
+```json
+{ "piece": "npm-slack", "trigger": "new_message", "events": [...] }
+```
+
+**3. Consume the queue** in a separate Worker (or the same Worker with a `queue()` handler) bound as a consumer.
+
+`callbackUrl` and `queueName` are mutually exclusive — provide exactly one per subscription.
+
 ### SDK usage
 
 ```ts

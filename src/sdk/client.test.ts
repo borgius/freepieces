@@ -73,3 +73,32 @@ describe('FreePiecesClient auth headers', () => {
     });
   });
 });
+
+describe('FreePiecesClient trigger and queue methods', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('trigger() calls POST /trigger/:piece/:trigger', async () => {
+    mockFetch.mockResolvedValue(okJson({ ok: true, events: [{ id: 1 }] }));
+    const client = createClient({
+      baseUrl: 'https://freepieces.example.workers.dev',
+      token: 'fp_sk_test',
+      fetch: mockFetch as unknown as typeof fetch,
+    });
+
+    const result = await client.trigger('gmail', 'gmail_new_email_received', {
+      propsValue: { label: 'INBOX' },
+      lastPollMs: 123456,
+    });
+
+    expect(result).toEqual({ ok: true, events: [{ id: 1 }] });
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://freepieces.example.workers.dev/trigger/gmail/gmail_new_email_received');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      propsValue: { label: 'INBOX' },
+      lastPollMs: 123456,
+    });
+  });
+});

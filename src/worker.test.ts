@@ -101,3 +101,147 @@ describe('admin piece users', () => {
     });
   });
 });
+
+// --------------------------------------------------------------------------
+// Queue delivery for subscriptions
+// --------------------------------------------------------------------------
+
+describe('queue delivery for subscriptions', () => {
+  function createEnvWithQueue(kv: KVNamespace, queueBinding?: { name: string; send: ReturnType<typeof vi.fn> }): Env {
+    const env = createEnv(kv);
+    env.RUN_API_KEY = 'fp_sk_test';
+    if (queueBinding) {
+      env[queueBinding.name] = { send: queueBinding.send };
+    }
+    return env;
+  }
+
+  it('creates a subscription with queueName when binding exists', async () => {
+    const mockSend = vi.fn().mockResolvedValue(undefined);
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnvWithQueue(kv, { name: 'QUEUE_SLACK_NEW_MESSAGE', send: mockSend });
+
+    const request = new Request('https://freepieces.example.workers.dev/subscriptions/slack/new-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer fp_sk_test',
+        'X-Piece-Token': 'xoxb-test',
+      },
+      body: JSON.stringify({
+        queueName: 'slack-new-message',
+        propsValue: { channel: 'C123' },
+      }),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+    expect(response.status).toBe(201);
+
+    const body = await response.json() as { ok: boolean; id: string; webhookUrl: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBeTruthy();
+    expect(body.webhookUrl).toBe('https://freepieces.example.workers.dev/webhook/slack');
+  });
+
+  it('rejects subscription with queueName when binding is missing', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnvWithQueue(kv); // no queue binding
+
+    const request = new Request('https://freepieces.example.workers.dev/subscriptions/slack/new-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer fp_sk_test',
+        'X-Piece-Token': 'xoxb-test',
+      },
+      body: JSON.stringify({
+        queueName: 'slack-new-message',
+        propsValue: {},
+      }),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+    expect(response.status).toBe(400);
+
+    const body = await response.json() as { error: string };
+    expect(body.error).toMatch(/Queue binding not found/);
+  });
+
+  it('rejects subscription with both callbackUrl and queueName', async () => {
+    const mockSend = vi.fn().mockResolvedValue(undefined);
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnvWithQueue(kv, { name: 'QUEUE_SLACK_NEW_MESSAGE', send: mockSend });
+
+    const request = new Request('https://freepieces.example.workers.dev/subscriptions/slack/new-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer fp_sk_test',
+        'X-Piece-Token': 'xoxb-test',
+      },
+      body: JSON.stringify({
+        callbackUrl: 'https://example.com/hook',
+        queueName: 'slack-new-message',
+        propsValue: {},
+      }),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+    expect(response.status).toBe(400);
+
+    const body = await response.json() as { error: string };
+    expect(body.error).toMatch(/not both/);
+  });
+
+  it('rejects subscription with neither callbackUrl nor queueName', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnvWithQueue(kv);
+
+    const request = new Request('https://freepieces.example.workers.dev/subscriptions/slack/new-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer fp_sk_test',
+        'X-Piece-Token': 'xoxb-test',
+      },
+      body: JSON.stringify({ propsValue: {} }),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+    expect(response.status).toBe(400);
+
+    const body = await response.json() as { error: string };
+    expect(body.error).toMatch(/callbackUrl or queueName/);
+  });
+
+  it('lists subscriptions with queueName field', async () => {
+    const sub = {
+      id: 'sub-q-1',
+      trigger: 'new-message',
+      propsValue: { channel: 'C123' },
+      queueName: 'slack-new-message',
+      pieceToken: 'xoxb-test',
+      createdAt: '2025-01-01T00:00:00Z',
+    };
+    const kv = new MemoryKv({
+      'sub:slack:sub-q-1': JSON.stringify(sub),
+    }) as unknown as KVNamespace;
+    const env = createEnvWithQueue(kv);
+
+    const request = new Request('https://freepieces.example.workers.dev/subscriptions/slack', {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer fp_sk_test',
+        'X-Piece-Token': 'xoxb-test',
+      },
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+    expect(response.status).toBe(200);
+
+    const body = await response.json() as { ok: boolean; subscriptions: Array<{ id: string; queueName?: string; callbackUrl?: string }> };
+    expect(body.subscriptions).toHaveLength(1);
+    expect(body.subscriptions[0].queueName).toBe('slack-new-message');
+    expect(body.subscriptions[0].callbackUrl).toBeUndefined();
+  });
+});

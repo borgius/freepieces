@@ -19,7 +19,7 @@ import {
   Text,
   VStack
 } from '@chakra-ui/react';
-import { ChevronDown, ChevronRight, Copy, ScanSearch } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Link2, ScanSearch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { PieceAction, PieceTrigger, PropDef } from '../lib/api';
 
@@ -53,6 +53,11 @@ function propPalette(type: string): string {
 // Code-generation helpers
 // --------------------------------------------------------------------------
 
+/** Worker base URL derived from the admin panel's origin (same Worker). */
+function baseUrl(): string {
+  return window.location.origin;
+}
+
 function toEnvKey(key: string): string {
   return key
     .replace(/([a-z])([A-Z])/g, '$1_$2')
@@ -80,7 +85,7 @@ function buildCurlSnippet(
     dataArg = `'{\n${lines.join('\n')}\n  }'`;
   }
   return [
-    `curl "$FREEPIECES_URL/run/${pieceName}/${actionName}" \\`,
+    `curl "${baseUrl()}/run/${pieceName}/${actionName}" \\`,
     `  -X POST \\`,
     `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
@@ -103,7 +108,7 @@ function buildFetchSnippet(
       ? `JSON.stringify({\n${bodyLines.join('\n')}\n  })`
       : 'JSON.stringify({})';
   return [
-    `const res = await fetch(\`\${process.env.FREEPIECES_URL}/run/${pieceName}/${actionName}\`, {`,
+    `const res = await fetch('${baseUrl()}/run/${pieceName}/${actionName}', {`,
     `  method: 'POST',`,
     `  headers: {`,
     '    Authorization: `Bearer ${process.env.FREEPIECES_TOKEN}`,',
@@ -152,7 +157,154 @@ function CodeBlock({ label, code }: { label: string; code: string }) {
   );
 }
 
-function UsageTab({
+// --------------------------------------------------------------------------
+// Trigger-specific code snippets
+// --------------------------------------------------------------------------
+
+function buildTriggerPollCurlSnippet(
+  pieceName: string,
+  triggerName: string,
+  props: Record<string, PropDef> | null,
+): string {
+  const entries = props ? Object.entries(props) : [];
+  let propsObj: string;
+  if (entries.length === 0) {
+    propsObj = '{}';
+  } else {
+    const lines = entries.map(([key], i) => {
+      const envKey = toEnvKey(key);
+      const comma = i < entries.length - 1 ? ',' : '';
+      return `      "${key}": '"$${envKey}"'${comma}`;
+    });
+    propsObj = `{\n${lines.join('\n')}\n    }`;
+  }
+  return [
+    `curl "${baseUrl()}/trigger/${pieceName}/${triggerName}" \\`,
+    `  -X POST \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{`,
+    `    "propsValue": ${propsObj},`,
+    `    "lastPollMs": 0`,
+    `  }'`,
+  ].join('\n');
+}
+
+function buildSubscribeCurlSnippet(
+  pieceName: string,
+  triggerName: string,
+  props: Record<string, PropDef> | null,
+): string {
+  const entries = props ? Object.entries(props) : [];
+  let propsObj: string;
+  if (entries.length === 0) {
+    propsObj = '{}';
+  } else {
+    const lines = entries.map(([key], i) => {
+      const envKey = toEnvKey(key);
+      const comma = i < entries.length - 1 ? ',' : '';
+      return `      "${key}": '"$${envKey}"'${comma}`;
+    });
+    propsObj = `{\n${lines.join('\n')}\n    }`;
+  }
+  return [
+    `# 1. Register your callback URL to receive events`,
+    `curl "${baseUrl()}/subscriptions/${pieceName}/${triggerName}" \\`,
+    `  -X POST \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{`,
+    `    "callbackUrl": "https://your-server.com/webhook",`,
+    `    "propsValue": ${propsObj}`,
+    `  }'`,
+  ].join('\n');
+}
+
+function buildSubscribeFetchSnippet(
+  pieceName: string,
+  triggerName: string,
+  props: Record<string, PropDef> | null,
+): string {
+  const entries = props ? Object.entries(props) : [];
+  const bodyLines = entries.map(([key]) => {
+    const envKey = toEnvKey(key);
+    return `      ${key}: process.env.${envKey},`;
+  });
+  const propsObj =
+    entries.length > 0
+      ? `{\n${bodyLines.join('\n')}\n    }`
+      : '{}';
+  return [
+    `// 1. Register your callback URL to receive events`,
+    `const res = await fetch('${baseUrl()}/subscriptions/${pieceName}/${triggerName}', {`,
+    `  method: 'POST',`,
+    `  headers: {`,
+    '    Authorization: `Bearer ${process.env.FREEPIECES_TOKEN}`,',
+    `    'Content-Type': 'application/json',`,
+    `  },`,
+    `  body: JSON.stringify({`,
+    `    callbackUrl: 'https://your-server.com/webhook',`,
+    `    propsValue: ${propsObj},`,
+    `  }),`,
+    `});`,
+    `const { id, webhookUrl } = await res.json();`,
+    `// webhookUrl → give this to the provider (e.g. Slack Event Subscriptions)`,
+  ].join('\n');
+}
+
+function buildSubscribeQueueCurlSnippet(
+  pieceName: string,
+  triggerName: string,
+  props: Record<string, PropDef> | null,
+): string {
+  const entries = props ? Object.entries(props) : [];
+  let propsObj: string;
+  if (entries.length === 0) {
+    propsObj = '{}';
+  } else {
+    const lines = entries.map(([key], i) => {
+      const envKey = toEnvKey(key);
+      const comma = i < entries.length - 1 ? ',' : '';
+      return `      "${key}": '"$${envKey}"'${comma}`;
+    });
+    propsObj = `{\n${lines.join('\n')}\n    }`;
+  }
+  return [
+    `# Subscribe with a Cloudflare Queue as delivery target`,
+    `# Requires [[queues.producers]] binding in wrangler.toml`,
+    `curl "${baseUrl()}/subscriptions/${pieceName}/${triggerName}" \\`,
+    `  -X POST \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{`,
+    `    "queueName": "your-queue-name",`,
+    `    "propsValue": ${propsObj}`,
+    `  }'`,
+  ].join('\n');
+}
+
+function buildDeliveryPayloadExample(
+  pieceName: string,
+  triggerName: string,
+): string {
+  return JSON.stringify(
+    {
+      piece: pieceName,
+      trigger: triggerName,
+      events: [
+        { '...': 'event data from the provider' },
+      ],
+    },
+    null,
+    2,
+  );
+}
+
+// --------------------------------------------------------------------------
+// Usage tabs
+// --------------------------------------------------------------------------
+
+function ActionUsageTab({
   pieceName,
   actionName,
   props,
@@ -167,6 +319,112 @@ function UsageTab({
     <VStack align="stretch" gap={4}>
       <CodeBlock label="curl" code={curl} />
       <CodeBlock label="JavaScript (fetch)" code={fetchCode} />
+    </VStack>
+  );
+}
+
+function TriggerUsageTab({
+  pieceName,
+  triggerName,
+  triggerType,
+  props,
+}: {
+  pieceName: string;
+  triggerName: string;
+  triggerType: string;
+  props: Record<string, PropDef> | null;
+}) {
+  const isPolling = triggerType === 'POLLING';
+  const webhookUrl = `${baseUrl()}/webhook/${pieceName}`;
+
+  return (
+    <VStack align="stretch" gap={5}>
+      {/* Webhook URL — for APP_WEBHOOK / WEBHOOK triggers */}
+      {!isPolling && (
+        <Box>
+          <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+            Provider Webhook URL
+          </Text>
+          <Text fontSize="xs" color="gray.600" mb={2}>
+            Give this URL to the provider (e.g. Slack Event Subscriptions → Request URL).
+            Incoming events are forwarded to all registered subscriptions.
+          </Text>
+          <HStack
+            bg="purple.50"
+            borderWidth="1px"
+            borderColor="purple.200"
+            rounded="md"
+            px={3}
+            py={2}
+            gap={2}
+          >
+            <Link2 size={13} color="var(--chakra-colors-purple-500)" />
+            <Box
+              flex={1}
+              fontFamily="mono"
+              fontSize="xs"
+              color="purple.700"
+              wordBreak="break-all"
+            >
+              {webhookUrl}
+            </Box>
+            <ClipboardRoot value={webhookUrl} timeout={1500}>
+              <ClipboardTrigger asChild>
+                <Box as="button" color="gray.400" _hover={{ color: 'purple.500' }} flexShrink={0} title="Copy">
+                  <Copy size={13} />
+                </Box>
+              </ClipboardTrigger>
+            </ClipboardRoot>
+          </HStack>
+        </Box>
+      )}
+
+      {/* Subscribe — for APP_WEBHOOK / WEBHOOK triggers */}
+      {!isPolling && (
+        <Box>
+          <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+            Subscribe to events
+          </Text>
+          <Text fontSize="xs" color="gray.600" mb={2}>
+            Register your HTTPS callback URL so matched events are POSTed to your server,
+            or use a Cloudflare Queue as the delivery target.
+          </Text>
+          <VStack align="stretch" gap={4}>
+            <CodeBlock label="curl (callback URL)" code={buildSubscribeCurlSnippet(pieceName, triggerName, props)} />
+            <CodeBlock label="JavaScript (fetch)" code={buildSubscribeFetchSnippet(pieceName, triggerName, props)} />
+            <CodeBlock label="curl (Cloudflare Queue)" code={buildSubscribeQueueCurlSnippet(pieceName, triggerName, props)} />
+          </VStack>
+        </Box>
+      )}
+
+      {/* Poll — for POLLING triggers */}
+      {isPolling && (
+        <Box>
+          <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+            Poll for new events
+          </Text>
+          <Text fontSize="xs" color="gray.600" mb={2}>
+            Call this endpoint on a schedule (e.g. every minute). Pass <code>lastPollMs</code> from your
+            previous run so only new events are returned. Use <code>0</code> for the first run.
+          </Text>
+          <VStack align="stretch" gap={4}>
+            <CodeBlock label="curl" code={buildTriggerPollCurlSnippet(pieceName, triggerName, props)} />
+          </VStack>
+        </Box>
+      )}
+
+      {/* Expected delivery payload */}
+      <Box>
+        <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+          {isPolling ? 'Response format' : 'Delivery payload'}
+        </Text>
+        <Text fontSize="xs" color="gray.600" mb={2}>
+          {isPolling
+            ? 'The response contains an events array with matched items.'
+            : 'When events match, this JSON is POSTed to your callbackUrl (or sent to your Cloudflare Queue).'}
+        </Text>
+        <CodeBlock label="JSON" code={buildDeliveryPayloadExample(pieceName, triggerName)} />
+      </Box>
     </VStack>
   );
 }
@@ -254,6 +512,9 @@ interface ItemRowProps {
   accentColor: string;
   badge?: string;
   badgePalette?: string;
+  kind: 'action' | 'trigger';
+  /** Trigger strategy, e.g. 'POLLING', 'APP_WEBHOOK', 'WEBHOOK'. Only set when kind='trigger'. */
+  triggerType?: string;
 }
 
 function ItemRow({
@@ -265,6 +526,8 @@ function ItemRow({
   accentColor,
   badge,
   badgePalette = 'gray',
+  kind,
+  triggerType,
 }: ItemRowProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const hasParams = props && Object.keys(props).length > 0;
@@ -356,7 +619,10 @@ function ItemRow({
                   }
                 </Tabs.Content>
                 <Tabs.Content value="usage">
-                  <UsageTab pieceName={pieceName} actionName={name} props={props} />
+                  {kind === 'trigger'
+                    ? <TriggerUsageTab pieceName={pieceName} triggerName={name} triggerType={triggerType ?? 'POLLING'} props={props} />
+                    : <ActionUsageTab pieceName={pieceName} actionName={name} props={props} />
+                  }
                 </Tabs.Content>
               </Tabs.Root>
             </DialogBody>
@@ -380,6 +646,7 @@ interface SectionProps {
   badgeKey?: string;
   badgePalette?: string;
   items: Array<PieceAction | PieceTrigger>;
+  kind: 'action' | 'trigger';
 }
 
 function CollapsibleSection({
@@ -391,6 +658,7 @@ function CollapsibleSection({
   badgeKey,
   badgePalette,
   items,
+  kind,
 }: SectionProps) {
   const [open, setOpen] = useState(false);
 
@@ -432,6 +700,40 @@ function CollapsibleSection({
 
       {open && (
         <VStack align="stretch" gap={1}>
+          {/* Webhook URL for non-POLLING trigger sections */}
+          {kind === 'trigger' && items.some((t) => (t as PieceTrigger).type !== 'POLLING') && (
+            <Box
+              bg="purple.50"
+              borderWidth="1px"
+              borderColor="purple.200"
+              rounded="md"
+              px={3}
+              py={2}
+              mb={1}
+            >
+              <HStack gap={1.5} mb={1}>
+                <Link2 size={12} color="var(--chakra-colors-purple-500)" />
+                <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider">
+                  Provider Webhook URL
+                </Text>
+              </HStack>
+              <HStack gap={2}>
+                <Box flex={1} fontFamily="mono" fontSize="xs" color="purple.700" wordBreak="break-all">
+                  {`${baseUrl()}/webhook/${pieceName}`}
+                </Box>
+                <ClipboardRoot value={`${baseUrl()}/webhook/${pieceName}`} timeout={1500}>
+                  <ClipboardTrigger asChild>
+                    <Box as="button" color="gray.400" _hover={{ color: 'purple.500' }} flexShrink={0} title="Copy webhook URL">
+                      <Copy size={12} />
+                    </Box>
+                  </ClipboardTrigger>
+                </ClipboardRoot>
+              </HStack>
+              <Text fontSize="xs" color="gray.400" mt={1}>
+                Set this as the Request URL in your provider’s webhook settings.
+              </Text>
+            </Box>
+          )}
           {items.map((item) => (
             <ItemRow
               key={item.name}
@@ -443,6 +745,8 @@ function CollapsibleSection({
               accentColor={accentColor}
               badge={badgeKey ? String((item as unknown as Record<string, unknown>)[badgeKey] ?? '') : undefined}
               badgePalette={badgePalette}
+              kind={kind}
+              triggerType={kind === 'trigger' ? (item as PieceTrigger).type : undefined}
             />
           ))}
         </VStack>

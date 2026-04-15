@@ -7,7 +7,7 @@
 // Core SDK — client, errors, and options
 export { createClient, FreePiecesClient } from './client.js';
 export { FreePiecesError } from './types.js';
-export type { FreePiecesClientOptions, PieceSummary, ActionResult } from './types.js';
+export type { FreePiecesClientOptions, PieceSummary, ActionResult, TriggerResult } from './types.js';
 
 // All piece types + KnownPieces (auto-generated per installed pieces)
 export * from './generated/index.js';

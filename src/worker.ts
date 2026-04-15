@@ -439,8 +439,15 @@ interface WebhookSubscription {
   id: string;
   trigger: string;
   propsValue: Record<string, unknown>;
-  /** URL to POST matched events to. Must be HTTPS. */
-  callbackUrl: string;
+  /** URL to POST matched events to. Must be HTTPS. Mutually exclusive with `queueName`. */
+  callbackUrl?: string;
+  /**
+   * Cloudflare Queue name to deliver matched events to instead of an HTTP callback.
+   * The queue producer binding must exist in wrangler.toml as `QUEUE_<UPPER_SNAKE>`.
+   * For example, `queueName: "slack-new-message"` resolves to env binding `QUEUE_SLACK_NEW_MESSAGE`.
+   * Mutually exclusive with `callbackUrl`.
+   */
+  queueName?: string;
   /** @deprecated Legacy single-field runtime auth from older subscription records. */
   bearerToken?: string;
   /** OAuth2 KV lookup key, when the trigger runs under a stored user token. */
@@ -503,10 +510,19 @@ async function listSubscriptions(kv: KVNamespace, piece: string): Promise<Webhoo
 }
 
 /**
+ * Resolve a Cloudflare Queue producer binding from the environment.
+ * Convention: `queueName` "slack-new-message" → env binding "QUEUE_SLACK_NEW_MESSAGE".
+ */
+function resolveQueueBinding(env: Env, queueName: string): Queue | undefined {
+  const bindingName = 'QUEUE_' + queueName.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return env[bindingName] as Queue | undefined;
+}
+
+/**
  * Fan-out an inbound webhook payload to all active subscriptions for a piece.
- * For each subscription, runs the trigger's run() filter and POSTs any matched
- * events to the subscription's callbackUrl.  Best-effort: individual delivery
- * failures are logged but do not affect other subscriptions.
+ * For each subscription, runs the trigger's run() filter and delivers matched
+ * events to the subscription's callbackUrl or Cloudflare Queue.  Best-effort:
+ * individual delivery failures are logged but do not affect other subscriptions.
  */
 async function dispatchWebhook(
   pieceName: string,
@@ -538,14 +554,31 @@ async function dispatchWebhook(
 
       if (events.length === 0) return;
 
+      const eventPayload = { piece: pieceName, trigger: sub.trigger, events };
+
+      // Deliver to Cloudflare Queue when queueName is set
+      if (sub.queueName) {
+        const queue = resolveQueueBinding(env, sub.queueName);
+        if (!queue) {
+          console.error(`[freepieces] Queue binding not found for "${sub.queueName}". Add [[queues.producers]] to wrangler.toml.`);
+          return;
+        }
+        await queue.send(eventPayload).catch((err: unknown) => {
+          console.error(`[freepieces] Queue delivery to "${sub.queueName}" failed:`, err);
+        });
+        return;
+      }
+
       // POST matched events to the subscriber's callback URL (best-effort)
-      await fetch(sub.callbackUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ piece: pieceName, trigger: sub.trigger, events }),
-      }).catch((err: unknown) => {
-        console.error(`[freepieces] Delivery to ${sub.callbackUrl} failed:`, err);
-      });
+      if (sub.callbackUrl) {
+        await fetch(sub.callbackUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(eventPayload),
+        }).catch((err: unknown) => {
+          console.error(`[freepieces] Delivery to ${sub.callbackUrl} failed:`, err);
+        });
+      }
     }),
   );
 }
@@ -1134,7 +1167,8 @@ export default {
     // ── Webhook subscriptions ─────────────────────────────────────────────────
 
     // POST /subscriptions/:piece/:trigger
-    //   Body: { callbackUrl: string, propsValue?: Record<string,unknown> }
+    //   Body: { callbackUrl?: string, queueName?: string, propsValue?: Record<string,unknown> }
+    //   Exactly one of callbackUrl or queueName is required.
     //   Auth: runtime auth headers (stored with the subscription for future trigger dispatch)
     //   Returns: { ok, id, webhookUrl }
     const subCreateMatch = /^\/subscriptions\/([^/]+)\/([^/]+)$/.exec(pathname);
@@ -1156,23 +1190,38 @@ export default {
       }
       const { userId, pieceToken } = authResult.credentials;
 
-      let subBody: { callbackUrl?: string; propsValue?: Record<string, unknown> };
+      let subBody: { callbackUrl?: string; queueName?: string; propsValue?: Record<string, unknown> };
       try {
         subBody = (await request.json()) as typeof subBody;
       } catch {
         return json({ error: 'Invalid JSON body' }, { status: 400 });
       }
 
-      const { callbackUrl, propsValue = {} } = subBody;
-      if (!callbackUrl) {
-        return json({ error: 'Missing required field: callbackUrl' }, { status: 400 });
+      const { callbackUrl, queueName, propsValue = {} } = subBody;
+
+      // Exactly one delivery target required
+      if (callbackUrl && queueName) {
+        return json({ error: 'Provide either callbackUrl or queueName, not both' }, { status: 400 });
       }
-      // Require HTTPS to mitigate SSRF to non-TLS endpoints
-      try {
-        const parsed = new URL(callbackUrl);
-        if (parsed.protocol !== 'https:') throw new Error();
-      } catch {
-        return json({ error: 'callbackUrl must be a valid HTTPS URL' }, { status: 400 });
+      if (!callbackUrl && !queueName) {
+        return json({ error: 'Missing required field: callbackUrl or queueName' }, { status: 400 });
+      }
+
+      // Validate callbackUrl (HTTPS only to mitigate SSRF)
+      if (callbackUrl) {
+        try {
+          const parsed = new URL(callbackUrl);
+          if (parsed.protocol !== 'https:') throw new Error();
+        } catch {
+          return json({ error: 'callbackUrl must be a valid HTTPS URL' }, { status: 400 });
+        }
+      }
+
+      // Validate queueName binding exists in env
+      if (queueName) {
+        if (!resolveQueueBinding(env, queueName)) {
+          return json({ error: `Queue binding not found for "${queueName}". Add a [[queues.producers]] entry to wrangler.toml.` }, { status: 400 });
+        }
       }
 
       const subId = crypto.randomUUID();
@@ -1180,7 +1229,7 @@ export default {
         id: subId,
         trigger: triggerName,
         propsValue,
-        callbackUrl,
+        ...(callbackUrl ? { callbackUrl } : { queueName }),
         userId,
         pieceToken,
         createdAt: new Date().toISOString(),
@@ -1209,7 +1258,8 @@ export default {
           id: s.id,
           trigger: s.trigger,
           propsValue: s.propsValue,
-          callbackUrl: s.callbackUrl,
+          ...(s.callbackUrl ? { callbackUrl: s.callbackUrl } : {}),
+          ...(s.queueName ? { queueName: s.queueName } : {}),
           createdAt: s.createdAt,
         }));
       return json({ ok: true, subscriptions: mine });
@@ -1240,5 +1290,25 @@ export default {
     }
 
     return json({ error: 'Not found' }, { status: 404 });
-  }
+  },
+
+  async queue(batch: MessageBatch, env: Env): Promise<void> {
+    await Promise.allSettled(
+      batch.messages.map(async (msg) => {
+        const body = msg.body as { pieceName?: string; payload?: unknown };
+        const { pieceName, payload } = body;
+        if (!pieceName) {
+          msg.ack();
+          return;
+        }
+        const stored = getPiece(pieceName);
+        if (!stored || stored.kind !== 'ap') {
+          msg.ack();
+          return;
+        }
+        await dispatchWebhook(pieceName, stored.piece, payload, env);
+        msg.ack();
+      }),
+    );
+  },
 } satisfies ExportedHandler<Env>;

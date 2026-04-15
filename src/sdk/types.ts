@@ -62,6 +62,12 @@ export interface PieceSummary {
 /** Generic action call result envelope. */
 export type ActionResult<T = unknown> = T;
 
+/** Result envelope for trigger calls. */
+export interface TriggerResult<T = unknown> {
+  ok: boolean;
+  events: T[];
+}
+
 /** Error thrown when a worker response is not ok. */
 export class FreePiecesError extends Error {
   constructor(
