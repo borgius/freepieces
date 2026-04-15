@@ -3,6 +3,13 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    paths:
+      - 'docs/**'
+      - 'src/ghpages/**'
+      - 'src/admin/docs/**'
+      - 'src/admin/pages/DocsPage.tsx'
+      - 'vite.config.ghpages.ts'
+      - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
 permissions:
