@@ -3140,7 +3140,7 @@ snapshots:
       '@activepieces/pieces-framework': 0.26.2
       '@activepieces/shared': 0.53.2
       axios: 1.13.5(debug@4.4.3)
-      axios-retry: 4.4.1(axios@1.13.5)
+      axios-retry: 4.4.1(axios@1.13.5(debug@4.4.3))
       form-data: 4.0.4
       mime-types: 2.1.35
       request-filtering-agent: 2.0.1
@@ -4789,7 +4789,7 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios-retry@4.4.1(axios@1.13.5):
+  axios-retry@4.4.1(axios@1.13.5(debug@4.4.3)):
     dependencies:
       axios: 1.13.5(debug@4.4.3)
       is-retry-allowed: 2.2.0
