@@ -29,6 +29,9 @@ importers:
       commander:
         specifier: ^14.0.3
         version: 14.0.3
+      hono:
+        specifier: ^4.12.14
+        version: 4.12.14
       lucide-react:
         specifier: ^1.8.0
         version: 1.8.0(react@19.2.5)
@@ -1876,6 +1879,10 @@ packages:
   hoist-non-react-statics@3.3.2:
     resolution: {integrity: sha512-/gGivxi8JPKWNm/W0jSmzcMPpfpPLc3dY/6GxhX2hQ9iGj3aDfklV4ET7NjKpSinLpJ5vafa9iiGIEZg10SfBw==}
 
+  hono@4.12.14:
+    resolution: {integrity: sha512-am5zfg3yu6sqn5yjKBNqhnTX7Cv+m00ox+7jbaKkrLMRJ4rAdldd1xPd/JzbBWspqaQv6RSTrgFN95EsfhC+7w==}
+    engines: {node: '>=16.9.0'}
+
   html-to-text@9.0.5:
     resolution: {integrity: sha512-qY60FjREgVZL03vJU6IfMV4GDjGBIoOyvuFdpBDIX9yTlDw0TjxVBQp+P8NvpdIXNJvfWBTNul7fsAQJq2FNpg==}
     engines: {node: '>=14'}
@@ -3133,7 +3140,7 @@ snapshots:
       '@activepieces/pieces-framework': 0.26.2
       '@activepieces/shared': 0.53.2
       axios: 1.13.5(debug@4.4.3)
-      axios-retry: 4.4.1(axios@1.13.5(debug@4.4.3))
+      axios-retry: 4.4.1(axios@1.13.5)
       form-data: 4.0.4
       mime-types: 2.1.35
       request-filtering-agent: 2.0.1
@@ -4782,7 +4789,7 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios-retry@4.4.1(axios@1.13.5(debug@4.4.3)):
+  axios-retry@4.4.1(axios@1.13.5):
     dependencies:
       axios: 1.13.5(debug@4.4.3)
       is-retry-allowed: 2.2.0
@@ -5309,6 +5316,8 @@ snapshots:
   hoist-non-react-statics@3.3.2:
     dependencies:
       react-is: 16.13.1
+
+  hono@4.12.14: {}
 
   html-to-text@9.0.5:
     dependencies:
