@@ -394,7 +394,7 @@ const GLOBAL_SECRET_DEFS = [
   {
     key: 'RUN_API_KEY',
     displayName: 'Runtime API Key',
-    description: 'Shared caller-auth key for /run, /trigger, and /subscriptions. Prefix with fp_sk_.',
+    description: 'Shared caller-auth key for /run, /trigger, and /subscriptions. Prefix with fp_sk_. (echo "fp_sk_$(openssl rand -hex 32)")',
     required: false,
     command: 'wrangler secret put RUN_API_KEY',
   },
@@ -1111,7 +1111,7 @@ export default {
     // ── Inbound webhook (Slack Events API Request URL and equivalents) ────────
     //
     // Point Slack → Event Subscriptions → Request URL to:
-    //   https://freepieces.example.workers.dev/webhook/slack
+    //   https://<your-worker>.workers.dev/webhook/slack
     //
     // Handles:
     //   • Slack URL verification challenge (responds synchronously)
