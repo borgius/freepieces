@@ -1,8 +1,17 @@
+export const meta = {
+  slug: 'pieces',
+  title: 'Pieces',
+  summary: 'Understand native pieces, Activepieces wrappers, registration, and how piece names become runtime routes.',
+  section: 'architecture',
+  order: 30,
+  estimatedTime: '9 min',
+}
+
 # Pieces in freepieces
 
 This document explains what a **piece** is in `freepieces`, how pieces are structured, and how a piece becomes available at runtime.
 
-If you want to call a piece action, read [`docs/actions.md`](./actions.md). If you want to work with triggers, read [`docs/triggers.md`](./triggers.md) and [`docs/pooling.md`](./pooling.md).
+If you want to call a piece action, read [Actions](./actions.mdx). If you want to work with triggers, read [Triggers](./triggers.mdx) and [Polling triggers](./pooling.mdx).
 
 ## The short version
 
@@ -524,6 +533,6 @@ If you want to trace the behavior in code, start here:
 - `src/pieces/index.ts` — runtime piece registration
 - `src/pieces/npm-slack.ts` — AP wrapper example
 - `src/pieces/gmail.ts` — native piece example
-- `docs/actions.md` — action behavior
-- `docs/triggers.md` — webhook and queue trigger behavior
-- `docs/pooling.md` — polling behavior
+- `docs/actions.mdx` — action behavior
+- `docs/triggers.mdx` — webhook and queue trigger behavior
+- `docs/pooling.mdx` — polling behavior

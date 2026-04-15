@@ -25,7 +25,7 @@ The [Activepieces community](https://github.com/activepieces/activepieces/tree/m
 - **`fp` CLI** — scaffold a new Worker, search npm for pieces, install and generate wrappers, deploy
 - **Piece framework** — `createPiece()` and `createAction()` builders with full TypeScript types
 - **OAuth2 + API-key auth** — CSRF-protected OAuth flow, AES-256-GCM encrypted token storage in Cloudflare KV
-- **Admin UI** — React SPA for managing pieces, secrets, connected OAuth users, and OAuth sessions
+- **Admin UI** — React SPA for managing pieces, secrets, connected OAuth users, OAuth sessions, and embedded MDX docs
 - **Activepieces compat shims** — drop-in `createAction`, `PieceAuth`, and `Property` wrappers for porting community pieces
 
 ---
@@ -85,13 +85,13 @@ Run `fp --help` or `fp <command> --help` for full options.
 
 ## Documentation
 
-- `docs/quick-start.md` — bootstrap the repo locally, run a smoke test, and deploy to Cloudflare
-- `docs/install.md` — detailed reference for the local bootstrap flow
+- `docs/quick-start.mdx` — bootstrap the repo locally, run a smoke test, and deploy to Cloudflare
+- `docs/install.mdx` — detailed reference for the local bootstrap flow
 - `scripts/install.sh` — local bootstrap helper for this repository
-- `docs/pieces.md` — piece architecture, registration, and native vs AP pieces
-- `docs/actions.md` — action runtime contract and examples
-- `docs/triggers.md` — webhook subscriptions, callback delivery, and queue delivery
-- `docs/pooling.md` — polling triggers, with Gmail as the main example
+- `docs/pieces.mdx` — piece architecture, registration, and native vs AP pieces
+- `docs/actions.mdx` — action runtime contract and examples
+- `docs/triggers.mdx` — webhook subscriptions, callback delivery, and queue delivery
+- `docs/pooling.mdx` — polling triggers, with Gmail as the main example
 
 ---
 
@@ -111,11 +111,14 @@ wrangler secret put EXAMPLE_OAUTH_CLIENT_SECRET
 # 3. Create the KV namespace
 wrangler kv namespace create TOKEN_STORE
 
-# 4. Add the KV namespace ID to wrangler.toml (see comments in the file)
+# 4. Add the returned namespace ID to .env as TOKEN_STORE_ID
+#    and set FREEPIECES_PUBLIC_URL / FREEPIECES_URL there too
 
 # 5. Deploy
 npm run deploy
 ```
+
+`npm run deploy` runs `./scripts/deploy.sh`, which renders `wrangler.toml` from `wrangler.toml.tmpl` and your local `.env` before calling Wrangler.
 
 Native and compat OAuth pieces must declare their own `clientIdEnvKey` and `clientSecretEnvKey` values. Direct `registerApPiece()` integrations derive secret names from the piece name, for example `my-piece` → `MY_PIECE_CLIENT_ID` and `MY_PIECE_CLIENT_SECRET`.
 
@@ -216,6 +219,8 @@ Then open `https://<your-worker>.workers.dev/admin/` and log in. Sessions last 2
 OAuth-backed pieces also show a foldable **Users** section in the admin UI so you can inspect which stored `userId` values currently have tokens.
 
 **Local dev:** add the same three variables to `.env`, run `npm run worker:dev`, and open `http://localhost:8787/admin/`.
+
+The admin UI also includes a **Docs** tab that renders the repository guides directly from `docs/*.mdx`.
 
 > Run `npm run build:admin` at least once before `wrangler dev` — the SPA is served from `dist/public/` via the ASSETS binding.
 

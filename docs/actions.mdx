@@ -1,3 +1,12 @@
+export const meta = {
+  slug: 'actions',
+  title: 'Actions',
+  summary: 'Call `/run/:piece/:action` to execute work immediately and get the result back in the HTTP response.',
+  section: 'runtime',
+  order: 40,
+  estimatedTime: '8 min',
+}
+
 # Actions in freepieces
 
 This document explains how actions work in freepieces.
@@ -12,7 +21,7 @@ Examples:
 - call a custom API endpoint
 - run a simple API-key-backed operation such as `ping`
 
-If you want event-driven behavior, read [`docs/triggers.md`](./triggers.md). If you want time-based polling, read [`docs/pooling.md`](./pooling.md).
+If you want event-driven behavior, read [Triggers](./triggers.mdx). If you want time-based polling, read [Polling triggers](./pooling.mdx).
 
 ## The short version
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import {
   Box,
   Button,
@@ -13,13 +13,30 @@ import {
 } from '@chakra-ui/react';
 import { LogOut } from 'lucide-react';
 import { LoginPage } from './pages/LoginPage';
-import { PiecesPage } from './pages/PiecesPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { AddPiecePage } from './pages/AddPiecePage';
 import { getMe, logout } from './lib/api';
 
 type View = 'loading' | 'login' | 'app';
-type Tab = 'pieces' | 'add-piece' | 'settings';
+type Tab = 'pieces' | 'add-piece' | 'docs' | 'settings';
+
+const PiecesPage = lazy(async () => {
+  const module = await import('./pages/PiecesPage');
+  return { default: module.PiecesPage };
+});
+
+const AddPiecePage = lazy(async () => {
+  const module = await import('./pages/AddPiecePage');
+  return { default: module.AddPiecePage };
+});
+
+const SettingsPage = lazy(async () => {
+  const module = await import('./pages/SettingsPage');
+  return { default: module.SettingsPage };
+});
+
+const DocsPage = lazy(async () => {
+  const module = await import('./pages/DocsPage');
+  return { default: module.DocsPage };
+});
 
 export function App() {
   const [view, setView] = useState<View>('loading');
@@ -76,7 +93,7 @@ export function App() {
                 </Heading>
                 {/* Tab buttons */}
                 <HStack gap={0}>
-                  {([['pieces', 'Pieces'], ['add-piece', 'Add Piece'], ['settings', 'Settings']] as [Tab, string][]).map(([tab, label]) => (
+                  {([['pieces', 'Pieces'], ['add-piece', 'Add Piece'], ['docs', 'Docs'], ['settings', 'Settings']] as [Tab, string][]).map(([tab, label]) => (
                     <Box
                       key={tab}
                       as="button"
@@ -113,9 +130,18 @@ export function App() {
           </Box>
 
           {/* Tab content */}
-          {activeTab === 'pieces' && <PiecesPage />}
-          {activeTab === 'add-piece' && <AddPiecePage />}
-          {activeTab === 'settings' && <SettingsPage />}
+          <Suspense
+            fallback={
+              <Center minH="320px">
+                <Spinner size="lg" colorPalette="blue" />
+              </Center>
+            }
+          >
+            {activeTab === 'pieces' && <PiecesPage />}
+            {activeTab === 'add-piece' && <AddPiecePage />}
+            {activeTab === 'docs' && <DocsPage />}
+            {activeTab === 'settings' && <SettingsPage />}
+          </Suspense>
         </Box>
       )}
     </ChakraProvider>

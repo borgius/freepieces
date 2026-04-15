@@ -1,3 +1,12 @@
+export const meta = {
+  slug: 'triggers',
+  title: 'Triggers',
+  summary: 'Use webhook subscriptions, choose callback or queue delivery, and understand how fan-out works in freepieces.',
+  section: 'runtime',
+  order: 50,
+  estimatedTime: '10 min',
+}
+
 # Triggers in freepieces
 
 This document explains how triggers work in freepieces, with a focus on **webhook-based triggers** and the two delivery options for matched events:
@@ -5,7 +14,7 @@ This document explains how triggers work in freepieces, with a focus on **webhoo
 - **webhook callback delivery** to your HTTPS endpoint
 - **queue delivery** to a Cloudflare Queue
 
-If you want time-based polling, read [`docs/pooling.md`](./pooling.md). Polling and webhook subscriptions solve different problems.
+If you want time-based polling, read [Polling triggers](./pooling.mdx). Polling and webhook subscriptions solve different problems.
 
 ## The short version
 
@@ -94,7 +103,7 @@ It is **not** the same thing as creating a persistent subscription.
 | Typical use case | polling, testing, manual invocation | production webhook ingestion |
 | Piece support | native and AP triggers | currently AP pieces only |
 
-Important detail: the `/subscriptions/...` and `/webhook/:piece` flow currently supports **AP pieces**. Native Gmail polling is a separate path. That is why Gmail belongs in `docs/pooling.md`, while Slack-style event subscriptions belong here.
+Important detail: the `/subscriptions/...` and `/webhook/:piece` flow currently supports **AP pieces**. Native Gmail polling is a separate path. That is why Gmail belongs in [Polling triggers](./pooling.mdx), while Slack-style event subscriptions belong here.
 
 ## Who can use webhook subscriptions
 
@@ -467,7 +476,7 @@ The identity used to delete the subscription must match the identity that create
 
 ### Using `/subscriptions/...` for native Gmail polling
 
-That will not work. Gmail in this repository is a native piece. Use the direct polling flow documented in [`docs/pooling.md`](./pooling.md).
+That will not work. Gmail in this repository is a native piece. Use the direct polling flow documented in [Polling triggers](./pooling.mdx).
 
 ### Sending both `callbackUrl` and `queueName`
 
@@ -542,4 +551,4 @@ If you want to trace the behavior in code, start here:
 - `examples/queue-consumer.ts` — minimal queue consumer example
 - `wrangler.toml` — queue producer binding example
 - `wrangler-consumer.toml` — queue consumer example
-- `docs/pooling.md` — native polling triggers such as Gmail
+- `docs/pooling.mdx` — native polling triggers such as Gmail

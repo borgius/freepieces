@@ -169,7 +169,7 @@ Next steps:
 				 -H "Content-Type: application/json" \
 				 -H "Authorization: Bearer dev-token" \
 				 -d '{"hello":"world"}'
-	4. Read docs/install.md and docs/quick-start.md for the full walkthrough.
+	4. Read docs/install.mdx and docs/quick-start.mdx for the full walkthrough.
 
 When you are ready to deploy, create a real KV namespace, set Cloudflare secrets,
 update .env with real values, and run ./scripts/deploy.sh.

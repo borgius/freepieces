@@ -1,3 +1,12 @@
+export const meta = {
+  slug: 'quick-start',
+  title: 'Quick start',
+  summary: 'Go from a fresh clone to a working local worker, smoke test it, and prepare for deployment.',
+  section: 'getting-started',
+  order: 10,
+  estimatedTime: '8 min',
+}
+
 # Quick start
 
 This guide gets you from a fresh clone to a working local `freepieces` worker.
@@ -9,10 +18,10 @@ It covers two paths:
 
 If you want the conceptual docs, start here too:
 
-- [`docs/pieces.md`](./pieces.md)
-- [`docs/actions.md`](./actions.md)
-- [`docs/triggers.md`](./triggers.md)
-- [`docs/pooling.md`](./pooling.md)
+- [Pieces](./pieces.mdx)
+- [Actions](./actions.mdx)
+- [Triggers](./triggers.mdx)
+- [Polling triggers](./pooling.mdx)
 
 ## What you will have at the end
 
@@ -54,7 +63,7 @@ Run the local bootstrap script:
 bash scripts/install.sh
 ```
 
-If you want the detailed script reference, read [`docs/install.md`](./install.md).
+If you want the detailed script reference, read [Install and bootstrap](./install.mdx).
 
 Useful options:
 
@@ -227,16 +236,16 @@ To use Slack actions:
 npx tsx examples/slack-example.ts --actions
 ```
 
-That script uses the same runtime contract documented in [`docs/actions.md`](./actions.md).
+That script uses the same runtime contract documented in [Actions](./actions.mdx).
 
 ## 8. Understand what happens next
 
 After the smoke test, most users branch into one of these paths:
 
-- **piece architecture** → read [`docs/pieces.md`](./pieces.md)
-- **calling actions** → read [`docs/actions.md`](./actions.md)
-- **webhook and queue triggers** → read [`docs/triggers.md`](./triggers.md)
-- **polling triggers such as Gmail** → read [`docs/pooling.md`](./pooling.md)
+- **piece architecture** → read [Pieces](./pieces.mdx)
+- **calling actions** → read [Actions](./actions.mdx)
+- **webhook and queue triggers** → read [Triggers](./triggers.mdx)
+- **polling triggers such as Gmail** → read [Polling triggers](./pooling.mdx)
 
 ## 9. Deploy to Cloudflare
 
@@ -355,12 +364,12 @@ curl -X POST http://localhost:8787/run/example-apikey/ping \
 
 If you want to trace the setup flow in code, start here:
 
-- `docs/install.md` — detailed install-script reference
+- `docs/install.mdx` — detailed install-script reference
 - `scripts/install.sh` — local bootstrap helper
 - `.env.example` — environment variable template
 - `scripts/deploy.sh` — build and deploy helper
 - `package.json` — build, dev, check, and test scripts
-- `docs/actions.md` — action runtime details
-- `docs/triggers.md` — webhook and queue trigger details
-- `docs/pooling.md` — polling trigger details
-- `docs/pieces.md` — piece architecture and registration
+- `docs/actions.mdx` — action runtime details
+- `docs/triggers.mdx` — webhook and queue trigger details
+- `docs/pooling.mdx` — polling trigger details
+- `docs/pieces.mdx` — piece architecture and registration
