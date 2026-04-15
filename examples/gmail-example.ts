@@ -57,8 +57,9 @@ async function get(path: string): Promise<unknown> {
 
 /**
  * Call a piece action.
- * userId is used as the Bearer token — the worker looks up the stored
- * OAuth token from KV using it as the key.
+ * In secured mode the shared RUN_API_KEY authenticates the caller and USER_ID
+ * is sent separately as X-User-Id for OAuth2 KV lookup.
+ * In local dev (no RUN_API_KEY) USER_ID remains the bearer fallback.
  */
 async function run(action: string, props: Record<string, unknown>): Promise<unknown> {
   const headers: Record<string, string> = {

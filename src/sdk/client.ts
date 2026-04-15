@@ -80,6 +80,7 @@ export class FreePiecesClient {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
   private readonly userId: string | undefined;
+  private readonly pieceToken: string | undefined;
   private readonly fetchFn: typeof globalThis.fetch;
 
   constructor(options: FreePiecesClientOptions) {
@@ -87,6 +88,7 @@ export class FreePiecesClient {
     this.baseUrl  = url;
     this.token    = options.token;
     this.userId   = options.userId;
+    this.pieceToken = options.pieceToken;
     this.fetchFn  = options.fetch ?? globalThis.fetch.bind(globalThis);
 
     // Populate a typed proxy for every registered piece.
@@ -104,9 +106,14 @@ export class FreePiecesClient {
       // Production: token is the shared RUN_API_KEY; userId goes in X-User-Id.
       h['authorization'] = `Bearer ${this.token}`;
       if (this.userId) h['x-user-id'] = this.userId;
-    } else if (this.userId) {
-      // Local dev / no API key: userId is the bearer token (legacy compat).
-      h['authorization'] = `Bearer ${this.userId}`;
+      if (this.pieceToken) h['x-piece-token'] = this.pieceToken;
+    } else {
+      // Local dev / no API key: use the direct piece token when available,
+      // otherwise fall back to userId for OAuth2 KV lookup compatibility.
+      const bearerFallback = this.pieceToken ?? this.userId;
+      if (bearerFallback) h['authorization'] = `Bearer ${bearerFallback}`;
+      if (this.userId) h['x-user-id'] = this.userId;
+      if (this.pieceToken) h['x-piece-token'] = this.pieceToken;
     }
     return h;
   }
@@ -191,7 +198,9 @@ export class FreePiecesClient {
  *
  * const client = createClient({
  *   baseUrl: process.env.FREEPIECES_URL!,
- *   token:   process.env.FREEPIECES_TOKEN,
+ *   token:   process.env.RUN_API_KEY,
+ *   userId:  process.env.USER_ID,
+ *   pieceToken: process.env.FREEPIECES_PIECE_TOKEN,
  * });
  * ```
  */

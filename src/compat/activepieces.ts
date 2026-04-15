@@ -100,24 +100,31 @@ export function createAction(descriptor: ActivepiecesActionDescriptor): PieceAct
 export const PieceAuth = {
   /**
    * OAuth2 auth definition.
+   * Compat pieces still need explicit per-piece secret names.
    *
    * @example
    *   auth: PieceAuth.OAuth2({
    *     authorizationUrl: 'https://github.com/login/oauth/authorize',
    *     tokenUrl: 'https://github.com/login/oauth/access_token',
    *     scope: ['repo', 'read:user'],
+   *     clientIdEnvKey: 'MY_PIECE_CLIENT_ID',
+   *     clientSecretEnvKey: 'MY_PIECE_CLIENT_SECRET',
    *   })
    */
   OAuth2(options: {
     authorizationUrl: string;
     tokenUrl: string;
     scope: string[];
+    clientIdEnvKey: string;
+    clientSecretEnvKey: string;
   }): OAuth2AuthDefinition {
     return {
       type: 'oauth2',
       authorizationUrl: options.authorizationUrl,
       tokenUrl: options.tokenUrl,
-      scopes: options.scope
+      scopes: options.scope,
+      clientIdEnvKey: options.clientIdEnvKey,
+      clientSecretEnvKey: options.clientSecretEnvKey,
     };
   },
 

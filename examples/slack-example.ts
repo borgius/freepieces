@@ -63,11 +63,12 @@
  * Environment variables
  * ─────────────────────
  *   FREEPIECES_URL      base URL of the deployed worker
+ *   RUN_API_KEY         shared runtime auth key for secured workers
  *   SLACK_CHANNEL       channel ID to post the test message in (default: general)
  *   SLACK_USER_ID       Slack user ID for DM test and KV key for stored tokens
  *
  *   Bot token auth (CUSTOM_AUTH — never expires, recommended for most apps):
- *     SLACK_BOT_TOKEN   xoxb-... bot token, sent as Bearer on each request
+ *     SLACK_BOT_TOKEN   xoxb-... bot token, sent as X-Piece-Token when RUN_API_KEY is set
  *
  *   OAuth2 with token rotation (opt-in Slack app setting, tokens expire in 12h):
  *     SLACK_ACCESS_TOKEN    xoxe-1-... current access token
@@ -83,14 +84,16 @@
 import 'dotenv/config';
 
 const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
+const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
 // ── Bot token auth (CUSTOM_AUTH) ──────────────────────────────────────────────
-// Never expires. Sent directly as Bearer on every request.
+// Never expires. Sent directly as X-Piece-Token when RUN_API_KEY is enabled,
+// otherwise used as the bearer fallback.
 // Worker maps it to: { type: 'CUSTOM_AUTH', props: { botToken: '...' } }
 const BOT_TOKEN = process.env['SLACK_BOT_TOKEN'] ?? '';
 
 // ── OAuth2 with token rotation ─────────────────────────────────────────────────
 // Tokens expire in 12h. Run --seed-tokens once to store in KV, then use
-// Bearer <SLACK_USER_ID> for subsequent requests (worker auto-refreshes).
+// SLACK_USER_ID for subsequent requests (worker auto-refreshes).
 const ACCESS_TOKEN  = process.env['SLACK_ACCESS_TOKEN']  ?? '';
 const REFRESH_TOKEN = process.env['SLACK_REFRESH_TOKEN'] ?? '';
 const EXPIRES_IN    = parseInt(process.env['SLACK_EXPIRES_IN'] ?? '43200', 10);
@@ -100,7 +103,7 @@ const ADMIN_PASS    = process.env['ADMIN_PASSWORD'] ?? '';
 const CHANNEL       = process.env['SLACK_CHANNEL']  ?? 'C0000000000'; // replace with real channel ID
 const USER_ID_SLACK = process.env['SLACK_USER_ID']  ?? 'U0000000000'; // replace with real user ID
 
-// Whichever token to use as Bearer: bot token takes priority; falls back to userId (KV lookup)
+// Legacy bearer fallback for local dev when RUN_API_KEY is not configured.
 const BEARER = BOT_TOKEN || USER_ID_SLACK;
 
 const PIECE = 'slack';
@@ -113,6 +116,27 @@ async function get(path: string): Promise<unknown> {
   return res.json();
 }
 
+function buildRuntimeHeaders(withJson = true): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (withJson) {
+    headers['content-type'] = 'application/json';
+  }
+
+  if (RUN_API_KEY) {
+    headers.authorization = `Bearer ${RUN_API_KEY}`;
+    if (USER_ID_SLACK) headers['x-user-id'] = USER_ID_SLACK;
+    if (BOT_TOKEN) headers['x-piece-token'] = BOT_TOKEN;
+    return headers;
+  }
+
+  if (BEARER) {
+    headers.authorization = `Bearer ${BEARER}`;
+  }
+  if (USER_ID_SLACK) headers['x-user-id'] = USER_ID_SLACK;
+  if (BOT_TOKEN) headers['x-piece-token'] = BOT_TOKEN;
+  return headers;
+}
+
 /**
  * Call a Slack action.
  * The bot token is sent as the Bearer token — the worker maps it to the
@@ -121,10 +145,7 @@ async function get(path: string): Promise<unknown> {
 async function run(action: string, props: Record<string, unknown>): Promise<unknown> {
   const res = await fetch(`${BASE_URL}/run/${PIECE}/${action}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${BEARER}`,
-    },
+    headers: buildRuntimeHeaders(),
     body: JSON.stringify(props),
   });
   const body = await res.json() as { ok: boolean; result?: unknown; error?: string };
@@ -150,10 +171,7 @@ async function trigger(
 ): Promise<unknown[]> {
   const res = await fetch(`${BASE_URL}/trigger/${PIECE}/${triggerName}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${BEARER}`,
-    },
+    headers: buildRuntimeHeaders(),
     body: JSON.stringify({ payload, propsValue }),
   });
   const body = await res.json() as { ok: boolean; events?: unknown[]; error?: string };
@@ -166,7 +184,7 @@ async function trigger(
 /**
  * Seed an access+refresh token pair directly into KV via the admin endpoint.
  * Only needed once when using OAuth2 with token rotation.
- * After seeding, use Bearer <SLACK_USER_ID> for all subsequent /run calls.
+ * After seeding, use SLACK_USER_ID for all subsequent /run calls.
  * The worker will auto-refresh the access token before it expires.
  */
 async function seedTokens(): Promise<void> {
@@ -399,10 +417,7 @@ async function subscribe(triggerName: string, propsValue: Record<string, unknown
   console.log(`\n  Subscribing to trigger: ${triggerName}`);
   const res = await fetch(`${BASE_URL}/subscriptions/${PIECE}/${triggerName}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${BEARER}`,
-    },
+    headers: buildRuntimeHeaders(),
     body: JSON.stringify({ callbackUrl: CALLBACK_URL, propsValue }),
   });
   const data = await res.json() as { ok: boolean; id?: string; webhookUrl?: string; error?: string };
@@ -422,7 +437,7 @@ async function listSubs(): Promise<void> {
   console.log('════════════════════════════════════════════════════════');
 
   const res = await fetch(`${BASE_URL}/subscriptions/${PIECE}`, {
-    headers: { authorization: `Bearer ${BEARER}` },
+    headers: buildRuntimeHeaders(false),
   });
   const data = await res.json() as { ok: boolean; subscriptions?: Array<{ id: string; trigger: string; propsValue: Record<string, unknown>; callbackUrl: string; createdAt: string }>; error?: string };
   if (!data.ok) throw new Error(`List failed: ${data.error ?? res.status}`);
@@ -446,7 +461,7 @@ async function unsubscribe(id: string, triggerName: string): Promise<void> {
   console.log(`\n  Deleting subscription: ${id}`);
   const res = await fetch(`${BASE_URL}/subscriptions/${PIECE}/${triggerName}/${id}`, {
     method: 'DELETE',
-    headers: { authorization: `Bearer ${BEARER}` },
+    headers: buildRuntimeHeaders(false),
   });
   const data = await res.json() as { ok: boolean; error?: string };
   if (!data.ok) throw new Error(`Unsubscribe failed: ${data.error ?? res.status}`);

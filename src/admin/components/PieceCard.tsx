@@ -8,12 +8,20 @@ import {
   Code,
   Flex,
   HStack,
+  Spinner,
   Text,
   VStack,
 } from '@chakra-ui/react';
-import { type PieceInfo, type SecretGroup, installPiece, uninstallPiece } from '../lib/api';
+import {
+  type PieceInfo,
+  type PieceUser,
+  type SecretGroup,
+  installPiece,
+  listPieceUsers,
+  uninstallPiece,
+} from '../lib/api';
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, KeyRound, Webhook, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, KeyRound, Users, Webhook, Zap } from 'lucide-react';
 import { CollapsibleSection } from './ItemSection';
 
 const AUTH_PALETTE: Record<string, string> = {
@@ -42,6 +50,22 @@ function authLabel(type: string): string {
 
 function authPalette(type: string): string {
   return AUTH_PALETTE[type] ?? 'gray';
+}
+
+function getAuthTypes(auth: PieceInfo['auth']): string[] {
+  if (!auth) return [];
+  return (Array.isArray(auth) ? auth : [auth]).map((entry) => entry.type);
+}
+
+function authDisplayLabel(types: string[]): string {
+  if (types.length === 0) return AUTH_LABEL.none;
+  return types.map((type) => authLabel(type)).join(' / ');
+}
+
+function authDisplayPalette(types: string[]): string {
+  if (types.length === 1) return authPalette(types[0]);
+  if (types.includes('oauth2') || types.includes('OAUTH2')) return 'purple';
+  return 'gray';
 }
 
 // --------------------------------------------------------------------------
@@ -181,6 +205,130 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
   );
 }
 
+function UsersSection({ pieceName }: { pieceName: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [users, setUsers] = useState<PieceUser[] | null>(null);
+
+  async function handleToggle() {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+
+    if (!nextOpen || loading || users !== null) return;
+
+    setLoading(true);
+    setError('');
+    try {
+      setUsers(await listPieceUsers(pieceName));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load users');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Box mt={3}>
+      <Flex
+        as="button"
+        align="center"
+        gap={1.5}
+        w="full"
+        textAlign="left"
+        cursor="pointer"
+        _hover={{ color: 'gray.700' }}
+        color="gray.500"
+        onClick={() => void handleToggle()}
+        mb={open ? 2 : 0}
+      >
+        <Box flexShrink={0}>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </Box>
+        <Box flexShrink={0} color="teal.400">
+          <Users size={12} />
+        </Box>
+        <Text fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="wider">
+          Users
+        </Text>
+        {users && (
+          <Badge colorPalette={users.length > 0 ? 'teal' : 'gray'} variant="subtle" fontSize="2xs" ml={1}>
+            {users.length}
+          </Badge>
+        )}
+        {loading && <Spinner size="xs" ml={1} color="gray.400" />}
+      </Flex>
+
+      {open && (
+        <VStack align="stretch" gap={1.5}>
+          {loading && users === null && (
+            <Text fontSize="xs" color="gray.500">
+              Loading connected users…
+            </Text>
+          )}
+
+          {!loading && error && (
+            <Text fontSize="xs" color="red.500">
+              {error}
+            </Text>
+          )}
+
+          {!loading && !error && users?.length === 0 && (
+            <Text fontSize="xs" color="gray.500">
+              No connected users yet.
+            </Text>
+          )}
+
+          {!loading && !error && users && users.length > 0 && users.map((user) => (
+            <Box
+              key={user.userId}
+              borderWidth="1px"
+              borderColor="teal.100"
+              rounded="md"
+              px={3}
+              py={2}
+              bg="teal.50"
+            >
+              <HStack justify="space-between" align="center" gap={2}>
+                <VStack align="start" gap={0} minW={0} flex={1}>
+                  <Text
+                    fontSize="xs"
+                    fontWeight="medium"
+                    color="gray.800"
+                    fontFamily={user.displayName === user.userId ? 'mono' : undefined}
+                    lineClamp={1}
+                  >
+                    {user.displayName}
+                  </Text>
+                  {user.displayName !== user.userId && (
+                    <Text fontSize="xs" color="gray.400" fontFamily="mono" lineClamp={1}>
+                      {user.userId}
+                    </Text>
+                  )}
+                </VStack>
+
+                <ClipboardRoot value={user.userId} timeout={1500}>
+                  <ClipboardTrigger asChild>
+                    <Box
+                      as="button"
+                      color="gray.400"
+                      _hover={{ color: 'teal.500' }}
+                      flexShrink={0}
+                      title="Copy user id"
+                    >
+                      <Copy size={12} />
+                    </Box>
+                  </ClipboardTrigger>
+                </ClipboardRoot>
+              </HStack>
+            </Box>
+          ))}
+        </VStack>
+      )}
+    </Box>
+  );
+}
+
 interface Props {
   piece: PieceInfo;
   onToggle: (updated: PieceInfo) => void;
@@ -189,11 +337,7 @@ interface Props {
 export function PieceCard({ piece, onToggle }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  const authType =
-    Array.isArray(piece.auth)
-      ? (piece.auth as Array<{ type: string }>).map((a) => a.type).join(' / ')
-      : (piece.auth as { type: string } | undefined)?.type ?? '?';
+  const authTypes = getAuthTypes(piece.auth);
 
   async function handleToggle() {
     setError('');
@@ -241,8 +385,8 @@ export function PieceCard({ piece, onToggle }: Props) {
         </Flex>
 
         <HStack gap={2} mt={2} flexWrap="wrap">
-          <Badge colorPalette={authPalette(authType)} variant="outline" fontSize="xs">
-            {authLabel(authType)}
+          <Badge colorPalette={authDisplayPalette(authTypes)} variant="outline" fontSize="xs">
+            {authDisplayLabel(authTypes)}
           </Badge>
           <Badge colorPalette="blue" variant="outline" fontSize="xs">
             v{piece.version}
@@ -283,6 +427,8 @@ export function PieceCard({ piece, onToggle }: Props) {
             items={piece.triggers}
           />
         )}
+
+        {piece.supportsUsers && <UsersSection pieceName={piece.name} />}
 
         <SecretsSection groups={piece.secrets} />
       </Card.Body>

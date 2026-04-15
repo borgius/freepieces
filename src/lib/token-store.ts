@@ -15,6 +15,10 @@ function kvKey(pieceName: string, userId: string): string {
   return `token:${pieceName}:${userId}`;
 }
 
+function kvPrefix(pieceName: string): string {
+  return `token:${pieceName}:`;
+}
+
 /**
  * Persist an OAuth token record for a user+piece pair.
  * The record is JSON-serialised and AES-GCM encrypted before storage.
@@ -45,6 +49,35 @@ export async function getToken(
   if (!payload) return null;
   const plaintext = await decrypt(payload, encryptionKey);
   return JSON.parse(plaintext) as OAuthTokenRecord;
+}
+
+/**
+ * List stored OAuth lookup keys for a piece.
+ *
+ * The returned values are the raw `userId` strings used when tokens were
+ * stored, which may be email addresses or any other caller-defined lookup key.
+ */
+export async function listStoredUserIds(
+  kv: KVNamespace,
+  pieceName: string
+): Promise<string[]> {
+  const prefix = kvPrefix(pieceName);
+  const userIds = new Set<string>();
+  let cursor: string | undefined;
+
+  while (true) {
+    const page = await kv.list(cursor ? { prefix, cursor } : { prefix });
+    for (const key of page.keys) {
+      if (!key.name.startsWith(prefix)) continue;
+      const userId = key.name.slice(prefix.length);
+      if (userId) userIds.add(userId);
+    }
+
+    if (page.list_complete || !page.cursor) break;
+    cursor = page.cursor;
+  }
+
+  return [...userIds];
 }
 
 /** Delete a stored token (e.g. on logout or revocation). */

@@ -117,12 +117,14 @@ function makeEnvFile(
   kvId: string,
   adminUser: string,
   adminPass: string,
+  runApiKey: string,
   tokenKey: string,
   signingKey: string,
 ): string {
   return [
     `FREEPIECES_PUBLIC_URL=${publicUrl}`,
     `TOKEN_STORE_ID=${kvId}`,
+    `RUN_API_KEY=${runApiKey}`,
     `ADMIN_USER=${adminUser}`,
     `ADMIN_PASSWORD=${adminPass}`,
     `TOKEN_ENCRYPTION_KEY=${tokenKey}`,
@@ -276,6 +278,7 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
   const adminPass = adminPassAnswer as string;
 
   // 8. Generate secure keys
+  const runApiKey = `fp_sk_${generateHexSync(32)}`;
   const tokenKey = generateHexSync(32);
   const signingKey = generateHexSync(32);
 
@@ -298,7 +301,7 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
   // 10. Write .env for local dev
   await writeFile(
     join(projectPath, '.env'),
-    makeEnvFile(publicUrl, kvId, adminUser, adminPass, tokenKey, signingKey),
+    makeEnvFile(publicUrl, kvId, adminUser, adminPass, runApiKey, tokenKey, signingKey),
     'utf-8',
   );
   log.success('.env written (keep this secret, it is gitignored)');
@@ -307,6 +310,7 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
   s.start('Setting Cloudflare Worker secrets…');
   const secretErrors: string[] = [];
   for (const [name, value] of [
+    ['RUN_API_KEY', runApiKey],
     ['ADMIN_USER', adminUser],
     ['ADMIN_PASSWORD', adminPass],
     ['TOKEN_ENCRYPTION_KEY', tokenKey],

@@ -21,15 +21,24 @@ directory = "./dist/public"
 binding = "ASSETS"
 
 # Static credentials are stored as Cloudflare Secrets (never in vars):
-#   wrangler secret put OAUTH_CLIENT_ID
-#   wrangler secret put OAUTH_CLIENT_SECRET
 #   wrangler secret put TOKEN_ENCRYPTION_KEY   # 32 random hex bytes → AES-GCM key material
 #
 # Gmail OAuth2 credentials:
 #   wrangler secret put GMAIL_CLIENT_ID
 #   wrangler secret put GMAIL_CLIENT_SECRET
 #
+# Example OAuth2 piece credentials:
+#   wrangler secret put EXAMPLE_OAUTH_CLIENT_ID
+#   wrangler secret put EXAMPLE_OAUTH_CLIENT_SECRET
+#
 # Admin UI credentials (set in .env for local dev, secrets for production):
 #   wrangler secret put ADMIN_USER
 #   wrangler secret put ADMIN_PASSWORD
 #   wrangler secret put ADMIN_SIGNING_KEY      # 32 random hex bytes → openssl rand -hex 32
+#
+# Runtime API key (recommended):
+#   wrangler secret put RUN_API_KEY            # prefix with fp_sk_, e.g. fp_sk_<hex32>
+# When set, runtime callers use:
+#   Authorization: Bearer <RUN_API_KEY>
+#   X-User-Id: <userId>
+#   X-Piece-Token: <token>

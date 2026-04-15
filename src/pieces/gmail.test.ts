@@ -12,8 +12,6 @@ const { gmailPiece } = await import('./gmail');
 const mockEnv = {
   FREEPIECES_PUBLIC_URL: 'https://freepieces.test',
   TOKEN_STORE: {} as unknown as KVNamespace,
-  OAUTH_CLIENT_ID: 'generic-id',
-  OAUTH_CLIENT_SECRET: 'generic-secret',
   TOKEN_ENCRYPTION_KEY: 'a'.repeat(64),
   GMAIL_CLIENT_ID: '991527111173-test.apps.googleusercontent.com',
   GMAIL_CLIENT_SECRET: 'GOCSPX-test',

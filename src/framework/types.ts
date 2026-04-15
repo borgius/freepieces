@@ -12,10 +12,6 @@ export interface Env {
   ASSETS?: Fetcher;
 
   // -- Static credentials stored as Cloudflare Secrets (never in vars) -------
-  /** OAuth client/app ID, e.g. from GitHub / Slack / etc. */
-  OAUTH_CLIENT_ID: string;
-  /** OAuth client secret. */
-  OAUTH_CLIENT_SECRET: string;
   /**
    * 64-char hex string representing 32 raw bytes used as AES-GCM key material.
    * Generate with:  openssl rand -hex 32
@@ -44,11 +40,12 @@ export interface Env {
    * Optional shared secret that gates all /run, /trigger, and /subscriptions
    * endpoints. When set, every request to those routes must carry:
    *   Authorization: Bearer <RUN_API_KEY>
-   * and the userId (for OAuth2 KV lookups) must be sent separately as:
+    * and any runtime credentials must be sent separately as:
    *   X-User-Id: <userId>
+    *   X-Piece-Token: <token>
    *
-   * When absent (e.g. local dev with wrangler dev), the bearer token is
-   * treated as the userId directly (backward-compatible behaviour).
+    * When absent (e.g. local dev with wrangler dev), the bearer token remains
+    * the fallback for both userId and direct piece-token behaviour.
    *
    * Generate with:  openssl rand -hex 32
    * Store with:     wrangler secret put RUN_API_KEY
@@ -68,10 +65,10 @@ export interface OAuth2AuthDefinition {
   authorizationUrl: string;
   tokenUrl: string;
   scopes: string[];
-  /** Env key for the OAuth client ID. Defaults to OAUTH_CLIENT_ID. */
-  clientIdEnvKey?: string;
-  /** Env key for the OAuth client secret. Defaults to OAUTH_CLIENT_SECRET. */
-  clientSecretEnvKey?: string;
+  /** Env key for this piece's OAuth client ID secret. */
+  clientIdEnvKey: string;
+  /** Env key for this piece's OAuth client secret. */
+  clientSecretEnvKey: string;
 }
 
 export interface ApiKeyAuthDefinition {

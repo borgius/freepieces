@@ -6,13 +6,11 @@
 #   - KV namespace TOKEN_STORE created      (id in wrangler.toml)
 #   - Secrets already set via wrangler:
 #       TOKEN_ENCRYPTION_KEY  – 32-byte AES-GCM key  (openssl rand -hex 32)
-#       OAUTH_CLIENT_ID       – GitHub / provider OAuth app client ID
-#       OAUTH_CLIENT_SECRET   – GitHub / provider OAuth app client secret
+#       Per-piece OAuth secrets, e.g. GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
 #
 # Usage:
 #   ./deploy.sh                   # build + deploy
 #   ./deploy.sh --rotate-key      # regenerate TOKEN_ENCRYPTION_KEY and deploy
-#   ./deploy.sh --set-oauth       # (re)set OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET interactively
 #   ./deploy.sh --dry-run         # type-check + build only, no deploy
 
 set -euo pipefail
@@ -44,17 +42,15 @@ KV_BINDING="TOKEN_STORE"
 KV_NAMESPACE_ID="${TOKEN_STORE_ID:?TOKEN_STORE_ID not set in .env}"
 
 ROTATE_KEY=false
-SET_OAUTH=false
 DRY_RUN=false
 
 for arg in "$@"; do
   case "$arg" in
     --rotate-key)  ROTATE_KEY=true  ;;
-    --set-oauth)   SET_OAUTH=true   ;;
     --dry-run)     DRY_RUN=true     ;;
     *)
       echo "Unknown option: $arg"
-      echo "Usage: $0 [--rotate-key] [--set-oauth] [--dry-run]"
+      echo "Usage: $0 [--rotate-key] [--dry-run]"
       exit 1
       ;;
   esac
@@ -68,14 +64,6 @@ if [[ "$ROTATE_KEY" == "true" ]]; then
   echo "==> Rotating TOKEN_ENCRYPTION_KEY..."
   openssl rand -hex 32 | wrangler secret put TOKEN_ENCRYPTION_KEY
   echo "    ⚠️  Existing encrypted tokens in KV will be unreadable after key rotation."
-fi
-
-# ── Optional: (re)set OAuth credentials ─────────────────────────────────────
-if [[ "$SET_OAUTH" == "true" ]]; then
-  echo "==> Setting OAUTH_CLIENT_ID..."
-  wrangler secret put OAUTH_CLIENT_ID
-  echo "==> Setting OAUTH_CLIENT_SECRET..."
-  wrangler secret put OAUTH_CLIENT_SECRET
 fi
 
 # ── Ensure admin secrets are configured ─────────────────────────────────────
@@ -127,5 +115,5 @@ echo "    Health     : $PUBLIC_URL/health"
 echo "    Pieces     : $PUBLIC_URL/pieces"
 echo "    Admin UI   : $PUBLIC_URL/admin/"
 echo ""
-echo "To update OAuth credentials run: ./deploy.sh --set-oauth"
+echo "To update piece OAuth credentials run: wrangler secret put <PIECE>_CLIENT_ID and wrangler secret put <PIECE>_CLIENT_SECRET"
 echo "To rotate the encryption key run: ./deploy.sh --rotate-key"

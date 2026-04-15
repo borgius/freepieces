@@ -6,7 +6,7 @@
  * /auth/callback/:piece endpoints.
  *
  * To use a real provider replace the authorizationUrl / tokenUrl below and
- * register OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET as Cloudflare Secrets.
+ * register EXAMPLE_OAUTH_CLIENT_ID / EXAMPLE_OAUTH_CLIENT_SECRET as Cloudflare Secrets.
  */
 
 import { createPiece } from '../framework/piece';
@@ -20,7 +20,9 @@ export const exampleOAuthPiece = createPiece({
     type: 'oauth2',
     authorizationUrl: 'https://github.com/login/oauth/authorize',
     tokenUrl: 'https://github.com/login/oauth/access_token',
-    scopes: ['read:user', 'repo']
+    scopes: ['read:user', 'repo'],
+    clientIdEnvKey: 'EXAMPLE_OAUTH_CLIENT_ID',
+    clientSecretEnvKey: 'EXAMPLE_OAUTH_CLIENT_SECRET',
   },
   actions: [
     {

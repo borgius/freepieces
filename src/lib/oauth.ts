@@ -8,7 +8,7 @@
  *   callback can verify it was not tampered with.
  * • Token exchange uses the standard authorization-code flow.
  * • The resulting token is stored encrypted in KV (see token-store.ts).
- * • OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET are Cloudflare Secrets only.
+ * • Each OAuth piece declares its own client-id and client-secret env keys.
  */
 
 import type { OAuth2AuthDefinition, OAuthTokenRecord, Env } from '../framework/types';
@@ -127,6 +127,30 @@ export async function buildLoginUrl(
   return `${auth.authorizationUrl}?${params.toString()}`;
 }
 
+/** Resolve the piece-specific OAuth client credentials from env. */
+export function resolveOAuthClientCredentials(
+  auth: OAuth2AuthDefinition,
+  env: Env,
+): { clientId: string; clientSecret: string } {
+  const envRecord = env as Record<string, unknown>;
+  const clientId = envRecord[auth.clientIdEnvKey];
+  const clientSecret = envRecord[auth.clientSecretEnvKey];
+
+  const missing = [
+    typeof clientId === 'string' && clientId.length > 0 ? null : auth.clientIdEnvKey,
+    typeof clientSecret === 'string' && clientSecret.length > 0 ? null : auth.clientSecretEnvKey,
+  ].filter((key): key is string => key !== null);
+
+  if (missing.length > 0) {
+    throw new Error(`Missing OAuth client credentials: ${missing.join(', ')}`);
+  }
+
+  return {
+    clientId: clientId as string,
+    clientSecret: clientSecret as string,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Callback / token exchange
 // ---------------------------------------------------------------------------
@@ -150,13 +174,15 @@ export async function handleCallback(
   const state = await decodeState(rawState, env.TOKEN_ENCRYPTION_KEY);
   if (!state) throw new Error('Invalid or tampered state parameter — possible CSRF attempt');
 
+  const { clientId, clientSecret } = resolveOAuthClientCredentials(auth, env);
+
   // Exchange code for tokens
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     redirect_uri: callbackUrl,
-    client_id: (env[auth.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '',
-    client_secret: (env[auth.clientSecretEnvKey ?? 'OAUTH_CLIENT_SECRET'] as string) ?? ''
+    client_id: clientId,
+    client_secret: clientSecret,
   });
 
   const resp = await fetch(auth.tokenUrl, {
@@ -219,11 +245,13 @@ export async function refreshTokenIfNeeded(
   if (Date.now() + REFRESH_THRESHOLD_MS < record.expiresAt) return record; // still fresh
   if (!record.refreshToken) return record;                           // can't refresh
 
+  const { clientId, clientSecret } = resolveOAuthClientCredentials(auth, env);
+
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: record.refreshToken,
-    client_id: (env[auth.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '',
-    client_secret: (env[auth.clientSecretEnvKey ?? 'OAUTH_CLIENT_SECRET'] as string) ?? '',
+    client_id: clientId,
+    client_secret: clientSecret,
   });
 
   const resp = await fetch(auth.tokenUrl, {

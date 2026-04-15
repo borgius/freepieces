@@ -29,6 +29,12 @@ export interface SecretGroup {
   secrets: SecretDef[];
 }
 
+export interface PieceAuthMode {
+  type: string;
+}
+
+export type PieceAuth = PieceAuthMode | PieceAuthMode[] | undefined;
+
 export interface GlobalSecretDef {
   key: string;
   displayName: string;
@@ -64,15 +70,21 @@ export interface PieceTrigger {
   props: Record<string, PropDef> | null;
 }
 
+export interface PieceUser {
+  userId: string;
+  displayName: string;
+}
+
 export interface PieceInfo {
   name: string;
   displayName: string;
   description: string | null;
   version: string;
-  auth: { type: string };
+  auth: PieceAuth;
   actions: PieceAction[];
   triggers: PieceTrigger[];
   secrets: SecretGroup[];
+  supportsUsers: boolean;
   enabled: boolean;
 }
 
@@ -117,6 +129,13 @@ export async function installPiece(name: string): Promise<void> {
 
 export async function uninstallPiece(name: string): Promise<void> {
   await apiFetch(`/admin/api/pieces/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export async function listPieceUsers(name: string): Promise<PieceUser[]> {
+  const response = await apiFetch<{ users: PieceUser[] }>(
+    `/admin/api/pieces/${encodeURIComponent(name)}/users`
+  );
+  return response.users;
 }
 
 export async function getSecrets(): Promise<SecretsResponse> {

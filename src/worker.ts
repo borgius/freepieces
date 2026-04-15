@@ -21,16 +21,19 @@
  *   POST /admin/api/logout                   → clear admin session cookie
  *   GET  /admin/api/me                       → current session info
  *   GET  /admin/api/pieces                   → list pieces + install status
+ *   GET  /admin/api/pieces/:name/users       → list stored OAuth users for a piece
  *   POST /admin/api/pieces/:name/install     → enable a piece
  *   DELETE /admin/api/pieces/:name           → disable a piece
  *   GET  /admin/api/secrets                  → global + per-piece secrets with set/missing status
  *
  * Security model
  * ──────────────
- *   • OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET  → Cloudflare Secrets
+ *   • Per-piece OAuth client secrets         → Cloudflare Secrets (for example GMAIL_CLIENT_ID)
  *   • TOKEN_ENCRYPTION_KEY                   → Cloudflare Secret (32 bytes hex)
  *   • Per-user tokens                        → encrypted in KV (TOKEN_STORE)
- *   • Predefined tokens for script clients   → sent via  Authorization: Bearer <token>
+ *   • RUN_API_KEY                            → shared caller-auth key for runtime endpoints
+ *   • OAuth2 lookup key                      → sent via X-User-Id when RUN_API_KEY is enabled
+ *   • Direct piece credential                → sent via X-Piece-Token when RUN_API_KEY is enabled
  *   • ADMIN_USER / ADMIN_PASSWORD            → Cloudflare Secrets (or .env for local dev)
  *   • ADMIN_SIGNING_KEY                      → Cloudflare Secret (32 bytes hex)
  *   • Admin sessions                         → HMAC-signed cookie (__fp_admin)
@@ -38,8 +41,13 @@
 
 import { listPieces, getPiece, getTrigger } from './framework/registry';
 import { buildCallbackUrl } from './framework/auth';
-import { buildLoginUrl, handleCallback, refreshTokenIfNeeded } from './lib/oauth';
-import { getToken, storeToken } from './lib/token-store';
+import {
+  buildLoginUrl,
+  handleCallback,
+  refreshTokenIfNeeded,
+  resolveOAuthClientCredentials,
+} from './lib/oauth';
+import { getToken, listStoredUserIds, storeToken } from './lib/token-store';
 import {
   createSessionToken,
   verifySessionToken,
@@ -47,6 +55,7 @@ import {
   parseCookie,
   COOKIE_NAME
 } from './lib/admin-session';
+import { resolveRuntimeRequestAuth } from './lib/request-auth';
 import './pieces/index.js';
 import type { Env, OAuth2AuthDefinition, ApPiece, PieceTriggerContext } from './framework/types';
 
@@ -191,6 +200,104 @@ function buildApContext(
   };
 }
 
+async function resolveNativeRuntimeAuth(
+  pieceName: string,
+  authDef: { type: string },
+  env: Env,
+  userId?: string,
+  pieceToken?: string,
+): Promise<Record<string, string> | undefined> {
+  if (authDef.type === 'oauth2') {
+    const lookupKey = userId;
+    const directToken = pieceToken ?? lookupKey;
+    const storedRecord = lookupKey && env.TOKEN_STORE
+      ? await getToken(env.TOKEN_STORE, pieceName, lookupKey, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+          console.error('[freepieces] Failed to retrieve token from KV:', err);
+          return null;
+        })
+      : null;
+
+    if (storedRecord) {
+      const lookupUserId = lookupKey;
+      if (!lookupUserId) return undefined;
+      const liveRecord = await refreshTokenIfNeeded(
+        storedRecord,
+        authDef as OAuth2AuthDefinition,
+        env,
+        pieceName,
+        lookupUserId,
+      ).catch((err) => {
+        console.error('[freepieces] Token refresh error:', err);
+        return storedRecord;
+      });
+      return {
+        accessToken: liveRecord.accessToken,
+        ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
+        ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
+      };
+    }
+
+    return directToken
+      ? { token: directToken, accessToken: directToken }
+      : undefined;
+  }
+
+  return pieceToken ? { token: pieceToken } : undefined;
+}
+
+async function resolveApRuntimeAuth(
+  pieceName: string,
+  piece: ApPiece,
+  env: Env,
+  userId?: string,
+  pieceToken?: string,
+): Promise<Record<string, string> | undefined> {
+  const storedRecord = userId && env.TOKEN_STORE
+    ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+        console.error('[freepieces] KV lookup failed for AP piece:', err);
+        return null;
+      })
+    : null;
+
+  if (storedRecord) {
+    const authDefs = Array.isArray(piece.auth) ? piece.auth : piece.auth ? [piece.auth] : [];
+    const apOAuth2 = authDefs.find((a) => a.type === 'OAUTH2');
+    let liveRecord = storedRecord;
+    if (apOAuth2?.tokenUrl) {
+      const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
+      const oauth2Def: OAuth2AuthDefinition = {
+        type: 'oauth2',
+        authorizationUrl: apOAuth2.authUrl ?? '',
+        tokenUrl: apOAuth2.tokenUrl,
+        scopes: apOAuth2.scope ?? [],
+        clientIdEnvKey: `${envPrefix}_CLIENT_ID`,
+        clientSecretEnvKey: `${envPrefix}_CLIENT_SECRET`,
+      };
+      const lookupUserId = userId;
+      if (!lookupUserId) return undefined;
+      liveRecord = await refreshTokenIfNeeded(
+        storedRecord,
+        oauth2Def,
+        env,
+        pieceName,
+        lookupUserId,
+      ).catch((err) => {
+        console.error('[freepieces] AP piece token refresh error:', err);
+        return storedRecord;
+      });
+    }
+    return {
+      accessToken: liveRecord.accessToken,
+      token: liveRecord.accessToken,
+      ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
+      ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
+    };
+  }
+
+  const directToken = pieceToken ?? userId;
+  return directToken ? { token: directToken } : undefined;
+}
+
 /**
  * Build the execution context for an AP trigger's run() call.
  * Mirrors buildApContext and adds the `payload` and `app` fields expected
@@ -285,18 +392,11 @@ const GLOBAL_SECRET_DEFS = [
     command: 'wrangler secret put ADMIN_SIGNING_KEY',
   },
   {
-    key: 'OAUTH_CLIENT_ID',
-    displayName: 'OAuth Client ID',
-    description: 'OAuth app client ID for native OAuth pieces using shared credentials.',
+    key: 'RUN_API_KEY',
+    displayName: 'Runtime API Key',
+    description: 'Shared caller-auth key for /run, /trigger, and /subscriptions. Prefix with fp_sk_.',
     required: false,
-    command: 'wrangler secret put OAUTH_CLIENT_ID',
-  },
-  {
-    key: 'OAUTH_CLIENT_SECRET',
-    displayName: 'OAuth Client Secret',
-    description: 'OAuth app client secret for native OAuth pieces using shared credentials.',
-    required: false,
-    command: 'wrangler secret put OAUTH_CLIENT_SECRET',
+    command: 'wrangler secret put RUN_API_KEY',
   },
 ] as const;
 
@@ -341,9 +441,23 @@ interface WebhookSubscription {
   propsValue: Record<string, unknown>;
   /** URL to POST matched events to. Must be HTTPS. */
   callbackUrl: string;
-  /** Bearer token to use when running the trigger filter. */
-  bearerToken: string | undefined;
+  /** @deprecated Legacy single-field runtime auth from older subscription records. */
+  bearerToken?: string;
+  /** OAuth2 KV lookup key, when the trigger runs under a stored user token. */
+  userId?: string;
+  /** Direct runtime credential for API-key / CUSTOM_AUTH trigger execution. */
+  pieceToken?: string;
   createdAt: string;
+}
+
+function sameSubscriptionOwner(
+  sub: Pick<WebhookSubscription, 'userId' | 'pieceToken'>,
+  owner: { userId?: string; pieceToken?: string },
+): boolean {
+  const legacy = (sub as WebhookSubscription).bearerToken;
+  const subUserId = sub.userId ?? legacy;
+  const subPieceToken = sub.pieceToken ?? legacy;
+  return subUserId === owner.userId && subPieceToken === owner.pieceToken;
 }
 
 /**
@@ -406,9 +520,13 @@ async function dispatchWebhook(
       const triggerDef = getTrigger(pieceName, sub.trigger);
       if (!triggerDef) return;
 
-      const auth: Record<string, string> | undefined = sub.bearerToken
-        ? { token: sub.bearerToken }
-        : undefined;
+      const auth = await resolveApRuntimeAuth(
+        pieceName,
+        piece,
+        env,
+        sub.userId ?? sub.bearerToken,
+        sub.pieceToken ?? sub.bearerToken,
+      );
 
       let events: unknown[];
       try {
@@ -436,6 +554,15 @@ async function dispatchWebhook(
 async function isPieceEnabled(kv: KVNamespace, name: string): Promise<boolean> {
   const flag = await kv.get(PIECE_FLAG(name));
   return flag !== 'false';
+}
+
+function pieceSupportsStoredUsers(auth: unknown): boolean {
+  const authDefs = Array.isArray(auth) ? auth : auth ? [auth] : [];
+  return authDefs.some((authDef) => {
+    if (!authDef || typeof authDef !== 'object') return false;
+    const type = String((authDef as { type?: unknown }).type ?? '');
+    return type === 'oauth2' || type === 'OAUTH2';
+  });
 }
 
 /** Validate the session cookie and return the payload, or null if missing/invalid. */
@@ -513,7 +640,15 @@ export default {
 
       const callbackUrl = buildCallbackUrl(env.FREEPIECES_PUBLIC_URL, pieceName);
       const authDef = stored.def.auth as OAuth2AuthDefinition;
-      const clientId = (env[authDef.clientIdEnvKey ?? 'OAUTH_CLIENT_ID'] as string) ?? '';
+      let clientId: string;
+      try {
+        ({ clientId } = resolveOAuthClientCredentials(authDef, env));
+      } catch (err) {
+        return json(
+          { error: err instanceof Error ? err.message : 'OAuth client credentials not configured' },
+          { status: 503 },
+        );
+      }
       const loginUrl = await buildLoginUrl(authDef, {
         pieceName,
         callbackUrl,
@@ -550,6 +685,10 @@ export default {
       } catch (err) {
         // Log internally; return a safe, non-leaking message to the caller.
         console.error('[freepieces] OAuth callback error:', err);
+        const status =
+          err instanceof Error && err.message.startsWith('Missing OAuth client credentials')
+            ? 503
+            : 400;
         const isKnownError =
           err instanceof Error &&
           (err.message.startsWith('Missing') ||
@@ -558,7 +697,7 @@ export default {
         const message = isKnownError && err instanceof Error
           ? err.message
           : 'OAuth callback failed';
-        return json({ error: message }, { status: 400 });
+        return json({ error: message }, { status });
       }
     }
 
@@ -574,26 +713,11 @@ export default {
         return json({ error: 'Action not found' }, { status: 404 });
       }
 
-      // Resolve auth from the Authorization header
-      const authHeader = request.headers.get('authorization');
-      const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
-
-      // Security gate: if RUN_API_KEY is configured the bearer token must match
-      // it exactly (timing-safe comparison). The userId for KV lookups then comes
-      // from the X-User-Id header instead.
-      // When RUN_API_KEY is absent (local dev), the bearer token IS the userId.
-      //
-      // Convention (adopted from Activepieces): API keys should be prefixed with
-      // "fp_sk_" so they are recognisable in logs and distinct from OAuth tokens.
-      // The worker accepts any value but the CLI/SDK generate fp_sk_<hex32> keys.
-      if (env.RUN_API_KEY) {
-        if (!bearerToken || !timingSafeEqual(bearerToken, env.RUN_API_KEY)) {
-          return json({ error: 'Unauthorized' }, { status: 401 });
-        }
+      const authResult = resolveRuntimeRequestAuth(request.headers, env.RUN_API_KEY);
+      if (!authResult.ok) {
+        return json({ error: authResult.error }, { status: authResult.status });
       }
-      const userId = env.RUN_API_KEY
-        ? (request.headers.get('x-user-id') ?? undefined)
-        : bearerToken;
+      const { userId, pieceToken } = authResult.credentials;
 
       let auth: Record<string, string> | undefined;
 
@@ -618,40 +742,7 @@ export default {
             return json({ error: 'Action not found' }, { status: 404 });
           }
 
-          if (userId) {
-            if (piece.auth.type === 'oauth2') {
-              const storedRecord = env.TOKEN_STORE
-                ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
-                    console.error('[freepieces] Failed to retrieve token from KV:', err);
-                    return null;
-                  })
-                : null;
-
-              if (storedRecord) {
-                // Refresh the token if it's expired or near expiry (15-min window).
-                // Works for Slack token rotation and any piece that uses OAuth2.
-                const liveRecord = await refreshTokenIfNeeded(
-                  storedRecord,
-                  stored.def.auth as OAuth2AuthDefinition,
-                  env,
-                  pieceName,
-                  userId,
-                ).catch((err) => {
-                  console.error('[freepieces] Token refresh error:', err);
-                  return storedRecord;
-                });
-                auth = {
-                  accessToken: liveRecord.accessToken,
-                  ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
-                  ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
-                };
-              } else {
-                auth = { token: userId, accessToken: userId };
-              }
-            } else {
-              auth = { token: userId };
-            }
-          }
+          auth = await resolveNativeRuntimeAuth(pieceName, piece.auth, env, userId, pieceToken);
 
           result = await action.run({ auth, props, env });
 
@@ -663,51 +754,7 @@ export default {
             return json({ error: 'Action not found' }, { status: 404 });
           }
 
-          if (userId) {
-            // Try KV lookup first — userId may be a key for stored OAuth2 tokens.
-            const storedRecord = env.TOKEN_STORE
-              ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
-                  console.error('[freepieces] KV lookup failed for AP piece:', err);
-                  return null;
-                })
-              : null;
-
-            if (storedRecord) {
-              // Attempt token refresh using the AP piece's OAUTH2 auth definition (if any).
-              const authDefs = Array.isArray(piece.auth) ? piece.auth : piece.auth ? [piece.auth] : [];
-              const apOAuth2 = authDefs.find((a) => a.type === 'OAUTH2');
-              let liveRecord = storedRecord;
-              if (apOAuth2?.tokenUrl) {
-                const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
-                const oauth2Def: OAuth2AuthDefinition = {
-                  type: 'oauth2',
-                  authorizationUrl: apOAuth2.authUrl ?? '',
-                  tokenUrl: apOAuth2.tokenUrl,
-                  scopes: apOAuth2.scope ?? [],
-                  clientIdEnvKey: `${envPrefix}_CLIENT_ID`,
-                  clientSecretEnvKey: `${envPrefix}_CLIENT_SECRET`,
-                };
-                liveRecord = await refreshTokenIfNeeded(
-                  storedRecord,
-                  oauth2Def,
-                  env,
-                  pieceName,
-                  userId,
-                ).catch((err) => {
-                  console.error('[freepieces] AP piece token refresh error:', err);
-                  return storedRecord;
-                });
-              }
-              auth = {
-                accessToken: liveRecord.accessToken,
-                token: liveRecord.accessToken,
-                ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
-                ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
-              };
-            } else {
-              auth = { token: userId };
-            }
-          }
+          auth = await resolveApRuntimeAuth(pieceName, piece, env, userId, pieceToken);
 
           const apCtx = buildApContext(pieceName, piece, auth, props, env);
           result = await action.run(apCtx);
@@ -745,9 +792,11 @@ export default {
         return json({ error: 'Invalid JSON body' }, { status: 400 });
       }
 
-      const authHeader = request.headers.get('authorization');
-      const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
-      const auth: Record<string, string> | undefined = bearerToken ? { token: bearerToken } : undefined;
+      const authResult = resolveRuntimeRequestAuth(request.headers, env.RUN_API_KEY);
+      if (!authResult.ok) {
+        return json({ error: authResult.error }, { status: authResult.status });
+      }
+      const { userId, pieceToken } = authResult.credentials;
 
       try {
         // ── Native piece trigger ────────────────────────────────────────────
@@ -755,22 +804,7 @@ export default {
           const nativeTrigger = stored.def.triggers?.find((t) => t.name === triggerName);
           if (!nativeTrigger) return json({ error: 'Trigger not found' }, { status: 404 });
 
-          let nativeAuth: Record<string, string> | undefined;
-          if (bearerToken && stored.def.auth.type === 'oauth2') {
-            const storedRecord = env.TOKEN_STORE
-              ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch(() => null)
-              : null;
-            if (storedRecord) {
-              const liveRecord = await refreshTokenIfNeeded(
-                storedRecord, stored.def.auth as OAuth2AuthDefinition, env, pieceName, bearerToken,
-              ).catch(() => storedRecord);
-              nativeAuth = { accessToken: liveRecord.accessToken, ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}) };
-            } else {
-              nativeAuth = { token: bearerToken, accessToken: bearerToken };
-            }
-          } else if (bearerToken) {
-            nativeAuth = { token: bearerToken };
-          }
+          const nativeAuth = await resolveNativeRuntimeAuth(pieceName, stored.def.auth, env, userId, pieceToken);
 
           const nativeCtx: PieceTriggerContext = {
             auth: nativeAuth,
@@ -789,6 +823,7 @@ export default {
           return json({ error: 'Piece does not support triggers' }, { status: 400 });
         }
 
+        const auth = await resolveApRuntimeAuth(pieceName, stored.piece, env, userId, pieceToken);
         const ctx = buildApTriggerContext(
           pieceName,
           stored.piece,
@@ -907,10 +942,29 @@ export default {
                   .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
               }))
               .filter((group) => group.secrets.length > 0),
+            supportsUsers: pieceSupportsStoredUsers(p.auth),
             enabled: await isPieceEnabled(env.TOKEN_STORE, p.name)
           }))
         );
         return json(result);
+      }
+
+      // GET /admin/api/pieces/:name/users
+      const usersMatch = /^\/admin\/api\/pieces\/([^/]+)\/users$/.exec(pathname);
+      if (usersMatch && request.method === 'GET') {
+        const name = decodeURIComponent(usersMatch[1]);
+        const piece = listPieces().find((entry) => entry.name === name);
+        if (!piece) return json({ error: 'Piece not found' }, { status: 404 });
+        if (!pieceSupportsStoredUsers(piece.auth)) {
+          return json({ error: 'Piece does not store user tokens' }, { status: 400 });
+        }
+
+        const users = (await listStoredUserIds(env.TOKEN_STORE, name)).map((userId) => ({
+          userId,
+          displayName: userId,
+        }));
+
+        return json({ users });
       }
 
       // GET /admin/api/secrets
@@ -1081,7 +1135,7 @@ export default {
 
     // POST /subscriptions/:piece/:trigger
     //   Body: { callbackUrl: string, propsValue?: Record<string,unknown> }
-    //   Auth: Bearer <token>   (stored with the subscription for future trigger dispatch)
+    //   Auth: runtime auth headers (stored with the subscription for future trigger dispatch)
     //   Returns: { ok, id, webhookUrl }
     const subCreateMatch = /^\/subscriptions\/([^/]+)\/([^/]+)$/.exec(pathname);
     if (subCreateMatch && request.method === 'POST') {
@@ -1096,8 +1150,11 @@ export default {
         return json({ error: 'Trigger not found' }, { status: 404 });
       }
 
-      const subAuthHeader = request.headers.get('authorization');
-      const subBearerToken = subAuthHeader?.startsWith('Bearer ') ? subAuthHeader.slice(7) : undefined;
+      const authResult = resolveRuntimeRequestAuth(request.headers, env.RUN_API_KEY);
+      if (!authResult.ok) {
+        return json({ error: authResult.error }, { status: authResult.status });
+      }
+      const { userId, pieceToken } = authResult.credentials;
 
       let subBody: { callbackUrl?: string; propsValue?: Record<string, unknown> };
       try {
@@ -1124,7 +1181,8 @@ export default {
         trigger: triggerName,
         propsValue,
         callbackUrl,
-        bearerToken: subBearerToken,
+        userId,
+        pieceToken,
         createdAt: new Date().toISOString(),
       };
       await env.TOKEN_STORE.put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
@@ -1134,18 +1192,19 @@ export default {
     }
 
     // GET /subscriptions/:piece
-    //   Auth: Bearer <token>  (returns only subscriptions associated with this token)
+    //   Auth: runtime auth headers (returns only subscriptions associated with this identity)
     const subListMatch = /^\/subscriptions\/([^/]+)$/.exec(pathname);
     if (subListMatch && request.method === 'GET') {
       const pieceName = decodeURIComponent(subListMatch[1]);
 
-      const listAuthHeader = request.headers.get('authorization');
-      const listBearer = listAuthHeader?.startsWith('Bearer ') ? listAuthHeader.slice(7) : undefined;
-      if (!listBearer) return json({ error: 'Bearer token required' }, { status: 401 });
+      const authResult = resolveRuntimeRequestAuth(request.headers, env.RUN_API_KEY);
+      if (!authResult.ok) {
+        return json({ error: authResult.error }, { status: authResult.status });
+      }
 
       const allSubs = await listSubscriptions(env.TOKEN_STORE, pieceName);
       const mine = allSubs
-        .filter((s) => s.bearerToken === listBearer)
+        .filter((s) => sameSubscriptionOwner(s, authResult.credentials))
         .map((s) => ({
           id: s.id,
           trigger: s.trigger,
@@ -1157,21 +1216,22 @@ export default {
     }
 
     // DELETE /subscriptions/:piece/:trigger/:id
-    //   Auth: Bearer <token>  (must match the token used to create the subscription)
+    //   Auth: runtime auth headers (must match the identity used to create the subscription)
     const subDeleteMatch = /^\/subscriptions\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(pathname);
     if (subDeleteMatch && request.method === 'DELETE') {
       const pieceName = decodeURIComponent(subDeleteMatch[1]);
       const subDelId = decodeURIComponent(subDeleteMatch[3]);
 
-      const delAuthHeader = request.headers.get('authorization');
-      const delBearer = delAuthHeader?.startsWith('Bearer ') ? delAuthHeader.slice(7) : undefined;
-      if (!delBearer) return json({ error: 'Bearer token required' }, { status: 401 });
+      const authResult = resolveRuntimeRequestAuth(request.headers, env.RUN_API_KEY);
+      if (!authResult.ok) {
+        return json({ error: authResult.error }, { status: authResult.status });
+      }
 
       const rawSub = await env.TOKEN_STORE.get(SUB_KEY(pieceName, subDelId));
       if (!rawSub) return json({ error: 'Subscription not found' }, { status: 404 });
 
       const existingSub = JSON.parse(rawSub) as WebhookSubscription;
-      if (existingSub.bearerToken !== delBearer) {
+      if (!sameSubscriptionOwner(existingSub, authResult.credentials)) {
         return json({ error: 'Forbidden' }, { status: 403 });
       }
 

@@ -108,6 +108,18 @@ function makeSecret(key: string, displayName: string, required: boolean, descrip
   return { key, displayName, description, required, command: `wrangler secret put ${key}` };
 }
 
+function requireNativeOAuthEnvKey(
+  auth: Record<string, unknown>,
+  key: 'clientIdEnvKey' | 'clientSecretEnvKey',
+  pieceName: string,
+): string {
+  const value = auth[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Native OAuth2 piece "${pieceName}" must define ${key}`);
+  }
+  return value;
+}
+
 /**
  * Derive auth mode groups for a piece, each containing the secrets needed for that mode.
  * Pieces with multiple auth modes (e.g. Slack: OAUTH2 + CUSTOM_AUTH) return one group per mode
@@ -117,12 +129,14 @@ function deriveSecrets(stored: StoredPiece): SecretGroup[] {
   if (stored.kind === 'native') {
     const auth = stored.def.auth as unknown as Record<string, unknown>;
     if (auth['type'] === 'oauth2') {
+      const clientIdEnvKey = requireNativeOAuthEnvKey(auth, 'clientIdEnvKey', stored.def.name);
+      const clientSecretEnvKey = requireNativeOAuthEnvKey(auth, 'clientSecretEnvKey', stored.def.name);
       return [{
         authType: 'oauth2',
         displayName: 'OAuth2',
         secrets: [
-          makeSecret(String(auth['clientIdEnvKey'] ?? 'OAUTH_CLIENT_ID'), 'OAuth Client ID', true),
-          makeSecret(String(auth['clientSecretEnvKey'] ?? 'OAUTH_CLIENT_SECRET'), 'OAuth Client Secret', true),
+          makeSecret(clientIdEnvKey, 'OAuth Client ID', true),
+          makeSecret(clientSecretEnvKey, 'OAuth Client Secret', true),
           makeSecret('TOKEN_ENCRYPTION_KEY', 'Token Encryption Key (openssl rand -hex 32)', true),
         ],
       }];

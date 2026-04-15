@@ -16,14 +16,15 @@ import { existsSync } from 'node:fs';
 import { setWranglerSecret } from '../util/wrangler.js';
 
 const SECRET_NAMES = [
+  { value: 'RUN_API_KEY', label: 'RUN_API_KEY (shared runtime auth key, prefix with fp_sk_)' },
   { value: 'TOKEN_ENCRYPTION_KEY', label: 'TOKEN_ENCRYPTION_KEY (AES-GCM key, 32 hex bytes)' },
   { value: 'ADMIN_SIGNING_KEY', label: 'ADMIN_SIGNING_KEY (HMAC key, 32 hex bytes)' },
   { value: 'ADMIN_USER', label: 'ADMIN_USER' },
   { value: 'ADMIN_PASSWORD', label: 'ADMIN_PASSWORD' },
+  { value: 'EXAMPLE_OAUTH_CLIENT_ID', label: 'EXAMPLE_OAUTH_CLIENT_ID' },
+  { value: 'EXAMPLE_OAUTH_CLIENT_SECRET', label: 'EXAMPLE_OAUTH_CLIENT_SECRET' },
   { value: 'GMAIL_CLIENT_ID', label: 'GMAIL_CLIENT_ID' },
   { value: 'GMAIL_CLIENT_SECRET', label: 'GMAIL_CLIENT_SECRET' },
-  { value: 'OAUTH_CLIENT_ID', label: 'OAUTH_CLIENT_ID (generic OAuth2)' },
-  { value: 'OAUTH_CLIENT_SECRET', label: 'OAUTH_CLIENT_SECRET (generic OAuth2)' },
   { value: 'custom', label: 'Custom secret name…' },
 ] as const;
 

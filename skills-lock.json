@@ -6,6 +6,11 @@
       "sourceType": "github",
       "computedHash": "9f7a0866bc627b095f738558b594ac4246bda6ff895f1feb78037f8bd98a01d9"
     },
+    "code-simplifier": {
+      "source": "getsentry/skills",
+      "sourceType": "github",
+      "computedHash": "ff9cb10181e31daf1f1644754c491601a7849dff4b4536a1d0ec4f97f680348e"
+    },
     "crafting-effective-readmes": {
       "source": "softaworks/agent-toolkit",
       "sourceType": "github",

@@ -25,7 +25,7 @@ The [Activepieces community](https://github.com/activepieces/activepieces/tree/m
 - **`fp` CLI** — scaffold a new Worker, search npm for pieces, install and generate wrappers, deploy
 - **Piece framework** — `createPiece()` and `createAction()` builders with full TypeScript types
 - **OAuth2 + API-key auth** — CSRF-protected OAuth flow, AES-256-GCM encrypted token storage in Cloudflare KV
-- **Admin UI** — React SPA for managing pieces, secrets, and OAuth sessions
+- **Admin UI** — React SPA for managing pieces, secrets, connected OAuth users, and OAuth sessions
 - **Activepieces compat shims** — drop-in `createAction`, `PieceAuth`, and `Property` wrappers for porting community pieces
 
 ---
@@ -70,7 +70,7 @@ fp deploy
 ## CLI reference
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `fp` / `fp tui` | Interactive piece selector (TUI) |
 | `fp init` | Scaffold a new Worker deployment |
 | `fp search [query]` | Search npm for `@activepieces/piece-*` packages |
@@ -87,28 +87,64 @@ Run `fp --help` or `fp <command> --help` for full options.
 
 ```bash
 # 1. Set required secrets
-wrangler secret put OAUTH_CLIENT_ID
-wrangler secret put OAUTH_CLIENT_SECRET
+wrangler secret put RUN_API_KEY            # prefix with fp_sk_, e.g. fp_sk_<hex32>
 wrangler secret put TOKEN_ENCRYPTION_KEY   # openssl rand -hex 32
 
-# 2. Create the KV namespace
+# 2. Set piece-specific OAuth secrets for every OAuth piece you enable
+wrangler secret put GMAIL_CLIENT_ID
+wrangler secret put GMAIL_CLIENT_SECRET
+wrangler secret put EXAMPLE_OAUTH_CLIENT_ID
+wrangler secret put EXAMPLE_OAUTH_CLIENT_SECRET
+
+# 3. Create the KV namespace
 wrangler kv namespace create TOKEN_STORE
 
-# 3. Add the KV namespace ID to wrangler.toml (see comments in the file)
+# 4. Add the KV namespace ID to wrangler.toml (see comments in the file)
 
-# 4. Deploy
+# 5. Deploy
 npm run deploy
 ```
+
+Native and compat OAuth pieces must declare their own `clientIdEnvKey` and `clientSecretEnvKey` values. Direct `registerApPiece()` integrations derive secret names from the piece name, for example `my-piece` → `MY_PIECE_CLIENT_ID` and `MY_PIECE_CLIENT_SECRET`.
 
 ### API routes
 
 | Method | Path | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GET` | `/health` | Health check |
 | `GET` | `/pieces` | List registered pieces and actions |
 | `GET` | `/auth/login/:piece?userId=<id>` | Start OAuth2 flow |
 | `GET` | `/auth/callback/:piece` | OAuth2 callback, stores token |
 | `POST` | `/run/:piece/:action` | Execute an action (JSON body = props) |
+| `POST` | `/trigger/:piece/:trigger` | Execute a trigger filter for an inbound payload |
+| `POST` | `/subscriptions/:piece/:trigger` | Register a webhook subscription |
+| `GET` | `/subscriptions/:piece` | List subscriptions for the current runtime identity |
+| `DELETE` | `/subscriptions/:piece/:trigger/:id` | Delete a subscription for the current runtime identity |
+
+### Runtime auth contract
+
+If `RUN_API_KEY` is configured on the worker, runtime endpoints use a split contract:
+
+- `Authorization: Bearer <RUN_API_KEY>` — authenticates the caller
+- `X-User-Id: <userId>` — identifies which stored OAuth2 token to read from KV
+- `X-Piece-Token: <token>` — passes a direct runtime credential for API-key or `CUSTOM_AUTH` pieces
+
+Use `X-User-Id` for OAuth2 pieces such as Gmail. Use `X-Piece-Token` for direct credentials such as Slack bot tokens or raw API keys. You may send both headers; the worker uses the one that matches the piece auth flow.
+
+In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback for both modes. The SDK and examples also send `X-User-Id` / `X-Piece-Token` when available so local and deployed behavior stay aligned.
+
+### SDK usage
+
+```ts
+import { createClient } from 'freepieces/sdk';
+
+const client = createClient({
+  baseUrl: 'https://freepieces.example.workers.dev',
+  token: process.env.RUN_API_KEY,      // fp_sk_<hex32>
+  userId: 'alice@example.com',         // KV lookup key for OAuth2 pieces
+  pieceToken: 'xoxb-...',              // optional direct credential for API-key/CUSTOM_AUTH pieces
+});
+```
 
 ---
 
@@ -128,6 +164,8 @@ npm run build:admin && ./deploy.sh
 
 Then open `https://<your-worker>.workers.dev/admin/` and log in. Sessions last 24 hours.
 
+OAuth-backed pieces also show a foldable **Users** section in the admin UI so you can inspect which stored `userId` values currently have tokens.
+
 **Local dev:** add the same three variables to `.env`, run `npm run worker:dev`, and open `http://localhost:8787/admin/`.
 
 > Run `npm run build:admin` at least once before `wrangler dev` — the SPA is served from `dist/public/` via the ASSETS binding.
@@ -137,11 +175,12 @@ Then open `https://<your-worker>.workers.dev/admin/` and log in. Sessions last 2
 ## Security
 
 | Data | Storage | Protection |
-|---|---|---|
-| OAuth client ID / secret | Cloudflare Secret | Deployment-time value, never in source |
+| --- | --- | --- |
+| Per-piece OAuth client ID / secret | Cloudflare Secret | Deployment-time value, never in source |
 | AES-GCM encryption key | Cloudflare Secret | `openssl rand -hex 32` |
 | Per-user OAuth tokens | Cloudflare KV | AES-256-GCM encrypted, fresh random IV per write |
-| Static API keys | Cloudflare Secret or runtime env | Never committed |
+| Runtime API key (`RUN_API_KEY`) | Cloudflare Secret | Prefix with `fp_sk_`; authenticates runtime callers |
+| Direct piece credentials | Request headers or Cloudflare Secrets | `X-Piece-Token` at runtime, or per-piece env secret |
 
 OAuth state is a signed blob (`<payload>.<hmac-sha256>`). The callback handler rejects any state that fails HMAC verification.
 
@@ -158,6 +197,14 @@ export const myPiece = createPiece({
   name: 'my-piece',
   displayName: 'My Piece',
   version: '0.1.0',
+  auth: {
+    type: 'oauth2',
+    authorizationUrl: 'https://provider.example/oauth/authorize',
+    tokenUrl: 'https://provider.example/oauth/token',
+    scopes: ['read', 'write'],
+    clientIdEnvKey: 'MY_PIECE_CLIENT_ID',
+    clientSecretEnvKey: 'MY_PIECE_CLIENT_SECRET',
+  },
   actions: [
     createAction({
       name: 'do-something',
@@ -170,6 +217,8 @@ export const myPiece = createPiece({
   ]
 });
 ```
+
+Native freepieces OAuth pieces do not share one global OAuth client credential pair. Each piece names its own secrets explicitly.
 
 ### Porting an Activepieces community piece
 
@@ -188,7 +237,9 @@ export const myPiece = createPiece({
   auth: PieceAuth.OAuth2({
     authorizationUrl: 'https://provider.example/oauth/authorize',
     tokenUrl: 'https://provider.example/oauth/token',
-    scope: ['read', 'write']
+    scope: ['read', 'write'],
+    clientIdEnvKey: 'MY_PIECE_CLIENT_ID',
+    clientSecretEnvKey: 'MY_PIECE_CLIENT_SECRET',
   }),
   actions: [
     createAction({
@@ -204,6 +255,8 @@ export const myPiece = createPiece({
   ]
 });
 ```
+
+Compat OAuth pieces should name their secrets explicitly too. Only direct `registerApPiece()` integrations derive `MY_PIECE_CLIENT_ID` / `MY_PIECE_CLIENT_SECRET` automatically from the piece name.
 
 ---
 
@@ -228,7 +281,7 @@ npm run build
 
 ### Project layout
 
-```
+```text
 src/
 ├── worker.ts          ← Cloudflare Worker entrypoint
 ├── framework/         ← createPiece, createAction, registry, auth helpers
@@ -245,6 +298,18 @@ src/
 ## Contributing
 
 Contributions are welcome. Open an issue to discuss a change before submitting a PR.
+
+### Change checklist
+
+For every new feature or behavior change, update every affected surface in the same PR:
+
+- Worker runtime contract (`src/worker.ts` and any shared auth helpers)
+- SDK types/client/examples when the caller contract changes
+- CLI scaffolding/config/help text when new secrets, flags, or env vars are introduced
+- README and examples when user-facing behavior changes
+- Tests for the new functionality or changed behavior
+
+Avoid partial backend updates. If a change touches auth, routes, examples, or generated usage, review worker, SDK, CLI, and docs together before you call it done.
 
 ```bash
 git clone https://github.com/borgius/freepieces.git

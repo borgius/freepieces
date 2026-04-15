@@ -33,6 +33,15 @@ export interface FreePiecesClientOptions {
    */
   userId?: string;
   /**
+   * Direct runtime credential for API-key or CUSTOM_AUTH pieces.
+   * Examples: Slack bot token (`xoxb-...`), raw API key, or an access token
+   * you want to pass through at request time.
+   *
+   * When `token` is set, this is sent as `X-Piece-Token`.
+   * When `token` is absent, this becomes the bearer fallback in local dev.
+   */
+  pieceToken?: string;
+  /**
    * Optional custom fetch implementation.
    * Defaults to the global `fetch`.
    */
