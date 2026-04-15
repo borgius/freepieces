@@ -9,7 +9,7 @@
  *
  * Prerequisites
  * ─────────────
- *   • Worker deployed:       ./deploy.sh
+ *   • Worker deployed:       scripts/deploy.sh
  *   • Gmail secrets set:     wrangler secret put GMAIL_CLIENT_ID
  *                            wrangler secret put GMAIL_CLIENT_SECRET
  *   • Node.js ≥ 20 with tsx: npx tsx examples/gmail-example.ts

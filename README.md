@@ -83,6 +83,18 @@ Run `fp --help` or `fp <command> --help` for full options.
 
 ---
 
+## Documentation
+
+- `docs/quick-start.md` — bootstrap the repo locally, run a smoke test, and deploy to Cloudflare
+- `docs/install.md` — detailed reference for the local bootstrap flow
+- `scripts/install.sh` — local bootstrap helper for this repository
+- `docs/pieces.md` — piece architecture, registration, and native vs AP pieces
+- `docs/actions.md` — action runtime contract and examples
+- `docs/triggers.md` — webhook subscriptions, callback delivery, and queue delivery
+- `docs/pooling.md` — polling triggers, with Gmail as the main example
+
+---
+
 ## Deploy to Cloudflare Workers
 
 ```bash
@@ -196,7 +208,7 @@ wrangler secret put ADMIN_PASSWORD      # strong password
 wrangler secret put ADMIN_SIGNING_KEY   # openssl rand -hex 32
 
 # Build and deploy
-npm run build:admin && ./deploy.sh
+npm run build:admin && ./scripts/deploy.sh
 ```
 
 Then open `https://<your-worker>.workers.dev/admin/` and log in. Sessions last 24 hours.

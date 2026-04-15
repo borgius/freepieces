@@ -1,0 +1,545 @@
+# Triggers in freepieces
+
+This document explains how triggers work in freepieces, with a focus on **webhook-based triggers** and the two delivery options for matched events:
+
+- **webhook callback delivery** to your HTTPS endpoint
+- **queue delivery** to a Cloudflare Queue
+
+If you want time-based polling, read [`docs/pooling.md`](./pooling.md). Polling and webhook subscriptions solve different problems.
+
+## The short version
+
+There are two main ways to execute a trigger in this repository:
+
+1. **Direct trigger execution**
+   - You call `POST /trigger/:piece/:trigger` yourself.
+   - The worker runs the trigger and returns `events` in the HTTP response.
+   - This is how native polling triggers such as Gmail work.
+
+2. **Webhook subscription execution**
+   - You register a subscription once with `POST /subscriptions/:piece/:trigger`.
+   - The provider sends webhooks to `POST /webhook/:piece`.
+   - freepieces runs the trigger for each subscription and forwards the matched events to either:
+     - `callbackUrl` over HTTPS, or
+     - `queueName` through a Cloudflare Queue
+
+That second mode is the one this document focuses on.
+
+## The key mental model
+
+For webhook subscriptions, freepieces sits in the middle:
+
+```text
+Provider webhook
+  -> /webhook/:piece
+  -> freepieces runs matching trigger logic
+  -> freepieces forwards matched events
+     -> callbackUrl (HTTPS)
+     or
+     -> queueName (Cloudflare Queue)
+```
+
+The worker is not a general workflow engine here. It is a **trigger filter and fan-out layer**.
+
+## Trigger building blocks
+
+There are three important routes.
+
+### 1. `POST /subscriptions/:piece/:trigger`
+
+Creates a persistent subscription record in KV.
+
+You use it to say:
+
+- which piece and trigger to watch
+- which trigger props to store
+- where matched events should go
+- which runtime identity the subscription belongs to
+
+### 2. `POST /webhook/:piece`
+
+Receives the raw webhook payload from the external provider.
+
+For Slack, this is the URL you put into Slack's Event Subscriptions settings.
+
+The worker then:
+
+- verifies the signature when a signing secret is configured
+- handles Slack's URL verification challenge
+- loads all subscriptions for that piece
+- runs the trigger logic for each subscription
+- delivers non-empty event matches to the configured target
+
+### 3. `POST /trigger/:piece/:trigger`
+
+Runs a trigger immediately and returns events in the HTTP response.
+
+This is useful for:
+
+- native polling triggers
+- local experiments
+- testing a trigger with a known payload
+- scripts that want the matched events directly
+
+It is **not** the same thing as creating a persistent subscription.
+
+## Direct trigger calls vs subscriptions
+
+| Topic | Direct `/trigger/...` call | Webhook subscription |
+| --- | --- | --- |
+| Who starts the run | You | The provider sends a webhook |
+| State stored by freepieces | None | Subscription record in KV |
+| Response | Returns `{ ok, events }` immediately | Returns `200 OK` to the provider, then fan-out happens asynchronously |
+| Delivery target | Your caller handles the returned events | freepieces forwards to `callbackUrl` or `queueName` |
+| Typical use case | polling, testing, manual invocation | production webhook ingestion |
+| Piece support | native and AP triggers | currently AP pieces only |
+
+Important detail: the `/subscriptions/...` and `/webhook/:piece` flow currently supports **AP pieces**. Native Gmail polling is a separate path. That is why Gmail belongs in `docs/pooling.md`, while Slack-style event subscriptions belong here.
+
+## Who can use webhook subscriptions
+
+Webhook subscriptions are intended for AP-style triggers such as Slack triggers.
+
+In the type layer, AP triggers can have strategies such as:
+
+- `APP_WEBHOOK`
+- `WEBHOOK`
+- `POLLING`
+
+In this repository, AP triggers share the same `run()` shape, and freepieces uses that `run()` function as the filter step when webhook payloads arrive.
+
+## Webhook subscription flow
+
+Here is the full flow for a Slack-style webhook trigger.
+
+```text
+1. You create a subscription
+   POST /subscriptions/slack/new-message
+
+2. freepieces stores
+   - trigger name
+   - propsValue
+   - callbackUrl or queueName
+   - runtime identity (userId / pieceToken)
+
+3. Slack sends a webhook
+   POST /webhook/slack
+
+4. freepieces
+   - verifies Slack signature if SLACK_SIGNING_SECRET is configured
+   - responds to Slack URL verification if needed
+   - loads all Slack subscriptions from KV
+   - runs the trigger for each subscription
+   - keeps only non-empty matches
+
+5. freepieces delivers matched events to
+   - callbackUrl over HTTPS, or
+   - queueName via Cloudflare Queue
+```
+
+The worker uses `ctx.waitUntil(...)` for webhook fan-out so it can return quickly to the provider instead of holding the webhook request open.
+
+## Subscription request contract
+
+Create a subscription with:
+
+```text
+POST /subscriptions/:piece/:trigger
+```
+
+### Headers when `RUN_API_KEY` is configured
+
+Use the runtime auth contract:
+
+```http
+Authorization: Bearer <RUN_API_KEY>
+X-User-Id: <userId>
+X-Piece-Token: <token>
+Content-Type: application/json
+```
+
+Use the headers that match the piece auth model:
+
+- use `X-User-Id` for OAuth-backed pieces
+- use `X-Piece-Token` for direct credentials such as Slack bot tokens
+- you may send both
+
+These values are stored with the subscription so freepieces can resolve auth later when webhook events arrive.
+
+### Local dev behavior
+
+If `RUN_API_KEY` is not configured, the bearer token remains the fallback for local development.
+
+### Request body
+
+Provide exactly one delivery target.
+
+```json
+{
+  "callbackUrl": "https://example.com/events",
+  "propsValue": {
+    "channel": "C0123456789"
+  }
+}
+```
+
+Or:
+
+```json
+{
+  "queueName": "slack-new-message",
+  "propsValue": {
+    "channel": "C0123456789"
+  }
+}
+```
+
+Rules:
+
+- `callbackUrl` and `queueName` are mutually exclusive
+- one of them is required
+- `callbackUrl` must be a valid **HTTPS** URL
+- `queueName` must resolve to a configured queue producer binding in `wrangler.toml`
+
+### Response shape
+
+```json
+{
+  "ok": true,
+  "id": "<subscription-id>",
+  "webhookUrl": "https://<your-worker>.workers.dev/webhook/slack"
+}
+```
+
+The `webhookUrl` is the endpoint the provider should call.
+
+## Webhook callback delivery
+
+When you use `callbackUrl`, matched events are sent to your HTTPS endpoint.
+
+### Callback flow
+
+```text
+Provider webhook
+  -> /webhook/:piece
+  -> trigger filtering
+  -> POST matched events to callbackUrl
+```
+
+### Callback event payload
+
+The callback receives JSON in this shape:
+
+```json
+{
+  "piece": "slack",
+  "trigger": "new-message",
+  "events": [
+    {
+      "event": {
+        "type": "message"
+      }
+    }
+  ]
+}
+```
+
+### When webhook callbacks are a good fit
+
+Choose `callbackUrl` when:
+
+- you already have an HTTPS service that should receive the events
+- the consumer lives outside Cloudflare
+- you want simple request/response debugging with normal HTTP tooling
+- you want to integrate with an existing app server or webhook endpoint
+
+### Callback trade-offs
+
+Webhook callbacks are straightforward, but they require a reachable HTTPS endpoint. If you do not want a public callback endpoint, queue delivery is often cleaner.
+
+## Queue delivery
+
+When you use `queueName`, freepieces sends the matched events to a Cloudflare Queue instead of posting them to an HTTP callback.
+
+### Queue flow
+
+```text
+Provider webhook
+  -> /webhook/:piece
+  -> trigger filtering
+  -> queue.send({ piece, trigger, events })
+  -> your queue consumer processes the message
+```
+
+### Queue event payload
+
+The queue message body has the same shape as the HTTP callback payload:
+
+```json
+{
+  "piece": "slack",
+  "trigger": "new-message",
+  "events": [
+    {
+      "event": {
+        "type": "message"
+      }
+    }
+  ]
+}
+```
+
+### Queue producer binding
+
+`queueName` must map to an environment binding in `wrangler.toml`.
+
+Example:
+
+```toml
+[[queues.producers]]
+queue = "slack-new-message"
+binding = "QUEUE_SLACK_NEW_MESSAGE"
+```
+
+Binding rule:
+
+```text
+queueName: "slack-new-message"
+-> env binding: "QUEUE_SLACK_NEW_MESSAGE"
+```
+
+freepieces resolves the binding like this:
+
+- uppercase the queue name
+- replace non-alphanumeric characters with `_`
+- prefix it with `QUEUE_`
+
+### Minimal consumer example
+
+This repository already includes a minimal queue consumer in `examples/queue-consumer.ts` and `wrangler-consumer.toml`.
+
+The consumer receives:
+
+```ts
+interface QueueMessage {
+  piece: string;
+  trigger: string;
+  events: unknown[];
+}
+```
+
+And `wrangler-consumer.toml` binds it to the same queue:
+
+```toml
+[[queues.consumers]]
+queue = "slack-new-message"
+max_batch_size = 10
+max_batch_timeout = 5
+```
+
+### When queue delivery is a good fit
+
+Choose `queueName` when:
+
+- your consumer is also on Cloudflare Workers
+- you do not want a public HTTPS callback endpoint
+- you want a decoupled async handoff between ingestion and processing
+- you want the trigger side and the consumer side to scale independently
+
+### Queue trade-offs
+
+Queue delivery is great inside Cloudflare, but it adds queue setup, bindings, and a consumer worker. It is a better fit for production pipelines than for quick experiments.
+
+## Webhooks vs queues
+
+Here is the practical comparison.
+
+| Topic | `callbackUrl` | `queueName` |
+| --- | --- | --- |
+| Destination | Your HTTPS endpoint | Cloudflare Queue |
+| Needs public endpoint | Yes | No |
+| Good for external systems | Yes | Usually no |
+| Good for Cloudflare-native consumers | Okay | Excellent |
+| Setup complexity | Lower | Higher |
+| Debugging style | HTTP request logs | Queue consumer logs |
+| Delivery payload | `{ piece, trigger, events }` | `{ piece, trigger, events }` |
+
+A good rule:
+
+- choose **webhooks** when another web app should receive the event directly
+- choose **queues** when another Worker should process the event asynchronously
+
+## Slack example
+
+Slack is the best current example of the subscription flow in this repository.
+
+### Step 1: create a subscription with an HTTPS callback
+
+```bash
+curl "https://<your-worker>.workers.dev/subscriptions/slack/new-message" \
+  -X POST \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "X-Piece-Token: $SLACK_BOT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "callbackUrl": "https://example.com/slack-events",
+    "propsValue": {
+      "channel": "C0123456789"
+    }
+  }'
+```
+
+### Step 2: or create a subscription with queue delivery
+
+```bash
+curl "https://<your-worker>.workers.dev/subscriptions/slack/new-message" \
+  -X POST \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "X-Piece-Token: $SLACK_BOT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queueName": "slack-new-message",
+    "propsValue": {
+      "channel": "C0123456789"
+    }
+  }'
+```
+
+### Step 3: point Slack at the worker
+
+Use the returned `webhookUrl` as the Slack Event Subscriptions Request URL:
+
+```text
+https://<your-worker>.workers.dev/webhook/slack
+```
+
+### Step 4: Slack sends events
+
+When Slack sends a payload to `/webhook/slack`, freepieces:
+
+- verifies the signature if `SLACK_SIGNING_SECRET` is configured
+- answers Slack's URL verification handshake when needed
+- runs the trigger logic for every stored Slack subscription
+- forwards matched events to your callback or queue
+
+## Security notes
+
+### `/subscriptions/...` uses runtime auth
+
+Creating, listing, and deleting subscriptions requires the runtime auth headers.
+
+### `/webhook/:piece` does not use `RUN_API_KEY`
+
+External providers such as Slack do not know your runtime API key. Instead, the inbound webhook route relies on provider-specific verification when configured.
+
+For Slack, if `SLACK_SIGNING_SECRET` is present, freepieces verifies:
+
+- `x-slack-request-timestamp`
+- `x-slack-signature`
+
+### Slack URL verification
+
+When Slack sends a `url_verification` payload, freepieces responds synchronously with the `challenge` value. That handshake is part of Slack webhook setup, not a normal trigger event.
+
+## Listing and deleting subscriptions
+
+### List your subscriptions
+
+```text
+GET /subscriptions/:piece
+```
+
+This returns only the subscriptions associated with the current runtime identity.
+
+### Delete a subscription
+
+```text
+DELETE /subscriptions/:piece/:trigger/:id
+```
+
+The identity used to delete the subscription must match the identity that created it.
+
+## Common mistakes
+
+### Using `/trigger/...` when you wanted a persistent subscription
+
+`/trigger/...` runs once and returns events immediately. It does not store anything.
+
+### Using `/subscriptions/...` for native Gmail polling
+
+That will not work. Gmail in this repository is a native piece. Use the direct polling flow documented in [`docs/pooling.md`](./pooling.md).
+
+### Sending both `callbackUrl` and `queueName`
+
+The worker rejects that request. Provide exactly one.
+
+### Using a non-HTTPS callback URL
+
+The worker rejects non-HTTPS callback URLs.
+
+### Forgetting the queue producer binding
+
+If `queueName` does not map to a `QUEUE_*` binding in `wrangler.toml`, subscription creation fails.
+
+### Expecting the provider webhook to return matched events
+
+The provider webhook route returns quickly. Event fan-out happens asynchronously.
+
+## A note about the worker's `queue()` handler
+
+This repository also exports a Worker `queue()` handler.
+
+That handler consumes queue messages shaped like:
+
+```json
+{
+  "pieceName": "slack",
+  "payload": { "...": "raw provider webhook payload" }
+}
+```
+
+and passes them back into `dispatchWebhook(...)`.
+
+That is a separate queue entrypoint. It is **not** the same payload shape as subscription delivery, which uses:
+
+```json
+{
+  "piece": "slack",
+  "trigger": "new-message",
+  "events": ["..."]
+}
+```
+
+If you are just choosing between webhook callbacks and queue delivery for subscriptions, you can ignore the worker `queue()` handler.
+
+## Quick reference
+
+### Use `callbackUrl` when
+
+- another service already has an HTTPS endpoint
+- you want direct HTTP delivery
+- you are integrating outside Cloudflare
+
+### Use `queueName` when
+
+- your consumer is a Worker
+- you want Cloudflare-native async delivery
+- you do not want a public callback endpoint
+
+### Use `/trigger/...` when
+
+- you want a one-off run
+- you are testing a trigger manually
+- you are implementing polling
+
+## Source files
+
+If you want to trace the behavior in code, start here:
+
+- `src/worker.ts` — webhook route, subscription routes, queue delivery, queue handler
+- `src/framework/types.ts` — AP trigger shapes
+- `examples/slack-example.ts` — callback subscription examples
+- `examples/queue-consumer.ts` — minimal queue consumer example
+- `wrangler.toml` — queue producer binding example
+- `wrangler-consumer.toml` — queue consumer example
+- `docs/pooling.md` — native polling triggers such as Gmail

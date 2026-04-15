@@ -23,7 +23,7 @@
  *
  * Prerequisites
  * ─────────────
- *   • Worker deployed:     ./deploy.sh
+ *   • Worker deployed:     scripts/deploy.sh
  *   • Bot token secret:    wrangler secret put SLACK_BOT_TOKEN
  *     (value: xoxb-... from your Slack app's OAuth page)
  *   • .env file:           cp .env.example .env  (fill in SLACK_BOT_TOKEN etc.)

@@ -1,0 +1,529 @@
+# Pieces in freepieces
+
+This document explains what a **piece** is in `freepieces`, how pieces are structured, and how a piece becomes available at runtime.
+
+If you want to call a piece action, read [`docs/actions.md`](./actions.md). If you want to work with triggers, read [`docs/triggers.md`](./triggers.md) and [`docs/pooling.md`](./pooling.md).
+
+## The short version
+
+A piece is the top-level integration unit in `freepieces`.
+
+A piece usually represents one external service or product, such as:
+
+- Gmail
+- Slack
+- GitHub
+- Stripe
+- a custom internal API
+
+A piece contains some combination of:
+
+- **auth** — how the piece gets credentials
+- **actions** — operations you can run now
+- **triggers** — event or polling entry points
+
+At runtime, the piece name becomes the URL segment used by the worker:
+
+- `/run/:piece/:action`
+- `/trigger/:piece/:trigger`
+- `/auth/login/:piece`
+- `/auth/callback/:piece`
+- `/subscriptions/:piece/:trigger`
+- `/webhook/:piece`
+
+So if the piece name is `gmail`, the worker exposes routes such as:
+
+- `/run/gmail/send_email`
+- `/trigger/gmail/gmail_new_email_received`
+- `/auth/login/gmail`
+
+## What a piece contains
+
+In the native freepieces model, a piece looks like this:
+
+```ts
+interface PieceDefinition {
+  name: string;
+  displayName: string;
+  description?: string;
+  version: string;
+  auth: PieceAuthDefinition;
+  actions: PieceAction[];
+  triggers?: PieceTrigger[];
+}
+```
+
+That means a piece is not just a bag of functions. It is a complete integration definition.
+
+### Core fields
+
+- `name` — the stable runtime identifier
+- `displayName` — the human-facing label
+- `description` — short explanation of what the piece does
+- `version` — piece version string
+- `auth` — auth strategy for the piece
+- `actions` — immediate operations
+- `triggers` — optional event or polling entry points
+
+## The anatomy of a piece
+
+### Piece name
+
+The `name` field matters more than it looks.
+
+It drives:
+
+- route names
+- registry lookups
+- KV token namespaces
+- environment variable prefixes for some AP integrations
+- SDK/runtime piece accessors
+
+Good piece names are:
+
+- lowercase
+- stable
+- URL-safe
+- descriptive
+
+Examples in this repository:
+
+- `gmail`
+- `slack`
+- `example-oauth`
+- `example-apikey`
+
+### Auth
+
+A piece declares how it expects credentials.
+
+Native pieces use these auth kinds:
+
+- `none`
+- `oauth2`
+- `apiKey`
+
+AP pieces can expose one or more AP auth types such as:
+
+- `OAUTH2`
+- `CUSTOM_AUTH`
+- `SECRET_TEXT`
+- `BASIC_AUTH`
+
+The worker resolves those auth models into the context shape expected by the action or trigger implementation.
+
+### Actions
+
+Actions are named operations such as:
+
+- send an email
+- search mail
+- send a Slack message
+- call a provider API
+
+Each action has:
+
+- a runtime `name`
+- a `displayName`
+- an optional `description`
+- optional `props`
+- a `run(...)` function
+
+### Triggers
+
+Triggers are named event entry points.
+
+They may be:
+
+- direct webhook filters
+- subscription-backed webhook handlers
+- polling triggers
+
+Native freepieces triggers use a `POLLING` tag today. AP pieces can expose multiple trigger strategies.
+
+## Two piece models in this repository
+
+`freepieces` supports two main ways to represent a piece.
+
+### 1. Native freepieces pieces
+
+These are authored directly against the lightweight `freepieces` framework.
+
+They use:
+
+- `createPiece()` from `src/framework/piece.ts`
+- the native type system from `src/framework/types.ts`
+
+Examples in this repository:
+
+- `src/pieces/gmail.ts`
+- `src/pieces/example-oauth.ts`
+- `src/pieces/example-apikey.ts`
+
+### 2. AP community pieces
+
+These are pieces exported by `@activepieces/piece-*` packages.
+
+They are registered with `registerApPiece()` and run through the compatibility layer in the worker.
+
+Example in this repository:
+
+- `src/pieces/npm-slack.ts`
+
+This is how `freepieces` can run community pieces without forcing callers to learn the entire Activepieces runtime model.
+
+## Native pieces
+
+A native piece is the most direct form.
+
+The builder is intentionally simple:
+
+```ts
+import { createPiece } from 'freepieces/framework';
+
+export const myPiece = createPiece({
+  name: 'my-piece',
+  displayName: 'My Piece',
+  version: '0.1.0',
+  auth: { type: 'none' },
+  actions: [],
+  triggers: [],
+});
+```
+
+The builder does not do magic. It returns the definition as-is.
+
+That makes native pieces easy to reason about:
+
+- your piece definition is the runtime definition
+- the worker reads it directly
+- auth keys for native OAuth pieces are explicit
+
+### Native piece strengths
+
+Choose a native piece when you want:
+
+- full control over the integration
+- a minimal runtime model
+- a Worker-friendly implementation with no extra framework surface
+- explicit per-piece secret naming
+
+Gmail is the best current native example in this repository.
+
+## AP community pieces
+
+An AP piece is registered by wrapping the piece export from an `@activepieces/piece-*` package.
+
+Example pattern:
+
+```ts
+import pkg from '@activepieces/piece-slack';
+import { registerApPiece } from '../framework/registry.js';
+import type { ApPiece } from '../framework/types.js';
+
+const slackPiece = (pkg as unknown as { slack: ApPiece }).slack;
+registerApPiece('slack', slackPiece);
+```
+
+The runtime piece name is the first argument to `registerApPiece()`.
+
+That means:
+
+- the npm package name does not have to equal the runtime piece name
+- the runtime piece name is what callers see in `/pieces`
+- the runtime piece name is what callers use in `/run/:piece/:action`
+
+### AP piece strengths
+
+Choose an AP piece when you want:
+
+- fast access to an existing community integration
+- minimal wrapper code
+- compatibility with the Activepieces action/trigger surface
+
+Slack is the clearest example in this repository.
+
+## How pieces become available at runtime
+
+The registry is the bridge between source files and runtime routes.
+
+### Registration functions
+
+`src/framework/registry.ts` exposes two registration functions:
+
+- `registerPiece(piece)` for native pieces
+- `registerApPiece(name, piece)` for AP pieces
+
+Internally, the registry stores a discriminated union:
+
+- native piece → `{ kind: 'native', def }`
+- AP piece → `{ kind: 'ap', name, piece }`
+
+The worker uses that `kind` field to decide how to build the execution context.
+
+### The central registry file
+
+`src/pieces/index.ts` is the file that pulls everything into the worker.
+
+Built-in pieces are registered directly there:
+
+```ts
+registerPiece(exampleOAuthPiece);
+registerPiece(exampleApiKeyPiece);
+registerPiece(gmailPiece);
+```
+
+Installed npm wrappers are imported there too:
+
+```ts
+import './npm-slack.js';
+```
+
+That wrapper file then calls `registerApPiece('slack', slackPiece)`.
+
+So the runtime chain is:
+
+```text
+src/pieces/index.ts
+  -> imports a piece file
+  -> piece file registers itself or is registered explicitly
+  -> registry stores it
+  -> worker can serve it through /pieces, /run, /trigger, and auth routes
+```
+
+## What the install flow changes
+
+The CLI install flow is intentionally small.
+
+For an installed AP package, the important runtime changes are:
+
+1. install the npm package
+2. generate a wrapper file such as `src/pieces/npm-slack.ts`
+3. add one import line to `src/pieces/index.ts`
+
+That is why `src/pieces/index.ts` describes itself as the only file install/uninstall should touch.
+
+One wrapper import is enough to make the piece appear in the runtime registry.
+
+## How the worker sees a piece
+
+The worker uses the registry for a few key operations:
+
+- `getPiece(name)` — find the raw stored entry
+- `getTrigger(pieceName, triggerName)` — find a trigger by name
+- `listPieces()` — build the normalized piece list
+
+The `/pieces` route is powered by `listPieces()`.
+
+That means piece metadata such as:
+
+- `name`
+- `displayName`
+- `description`
+- `auth`
+- action list
+- trigger list
+
+all come from the registry, not from ad-hoc route code.
+
+## What `/pieces` gives you
+
+The public `GET /pieces` route returns the registered runtime pieces and their callable surface.
+
+Use it to discover:
+
+- available piece names
+- action names
+- trigger names
+- auth model at a high level
+
+This is the route that clients and humans should use to see what is currently installed.
+
+### Important distinction
+
+The registry also derives more internal metadata, such as normalized prop definitions and secret groups for some internal views. But the runtime `/pieces` route is the public discovery surface.
+
+So if you are writing a client, start with `/pieces`.
+
+## Secret and auth conventions
+
+Pieces influence secret naming in a few different ways.
+
+### Native OAuth pieces
+
+Native OAuth pieces must name their client secret keys explicitly.
+
+Example:
+
+```ts
+auth: {
+  type: 'oauth2',
+  clientIdEnvKey: 'GMAIL_CLIENT_ID',
+  clientSecretEnvKey: 'GMAIL_CLIENT_SECRET',
+  ...
+}
+```
+
+That explicitness is intentional. Native pieces do not rely on one global naming convention for OAuth client credentials.
+
+### Direct `registerApPiece()` integrations
+
+For direct AP integrations, the worker and registry derive some secret names from the piece name.
+
+Example:
+
+```text
+piece name: slack
+prefix:     SLACK
+```
+
+That prefix is then used for common env key conventions such as:
+
+- `SLACK_CLIENT_ID`
+- `SLACK_CLIENT_SECRET`
+- `SLACK_BOT_TOKEN`
+- `SLACK_USERNAME`
+- `SLACK_PASSWORD`
+
+Which exact keys matter depends on the AP auth type.
+
+### Runtime credentials vs deployment secrets
+
+Not all piece credentials have to be set as deployment secrets.
+
+Two common patterns exist:
+
+- **stored OAuth token** selected by `X-User-Id`
+- **direct runtime credential** passed by `X-Piece-Token`
+
+That is why a piece may need some deployment-time secrets, some request-time credentials, or both.
+
+## File layout for pieces
+
+These paths matter when you work on piece-related code.
+
+| Path | Purpose |
+| --- | --- |
+| `src/framework/piece.ts` | native `createPiece()` builder |
+| `src/framework/types.ts` | native piece, action, and trigger types |
+| `src/framework/registry.ts` | registration, lookup, normalization |
+| `src/compat/activepieces.ts` | compatibility shims for AP-style authoring |
+| `src/pieces/index.ts` | central piece import/registration file |
+| `src/pieces/gmail.ts` | native Gmail piece |
+| `src/pieces/example-oauth.ts` | native OAuth example |
+| `src/pieces/example-apikey.ts` | native API-key example |
+| `src/pieces/npm-slack.ts` | installed AP wrapper example |
+
+## Native vs AP: how to choose
+
+A simple rule works well.
+
+### Choose a native piece when
+
+- you are building a new Worker-first integration
+- you want tight control over auth and runtime behavior
+- you want explicit TypeScript types and minimal abstractions
+- you need a custom shape that does not map neatly to AP patterns
+
+### Choose an AP piece when
+
+- the community piece already exists and works well
+- you want fast adoption of an existing integration
+- a thin wrapper is enough
+- you want to avoid rewriting a mature integration from scratch
+
+## Pieces, actions, and triggers fit together like this
+
+A piece is the container. Actions and triggers are the entry points.
+
+```text
+piece
+  -> auth
+  -> actions[]
+  -> triggers[]
+```
+
+Examples:
+
+- `gmail` piece
+  - action: `send_email`
+  - trigger: `gmail_new_email_received`
+- `slack` piece
+  - action: `send_channel_message`
+  - trigger: `new-message`
+
+So if you are trying to understand a route like:
+
+```text
+/run/slack/send_channel_message
+```
+
+read it as:
+
+- piece = `slack`
+- action = `send_channel_message`
+
+## Common mistakes
+
+### Confusing the npm package name with the runtime piece name
+
+Callers use the runtime piece name, not the package name.
+
+### Forgetting to register the piece
+
+A piece file can exist in the repository and still be invisible at runtime if it is never registered or imported from `src/pieces/index.ts`.
+
+### Using the display name in URLs
+
+Routes use `name`, not `displayName`.
+
+### Assuming every piece is native
+
+This repository supports both native and AP pieces. The worker handles them differently under the hood.
+
+### Assuming every piece secret must be preconfigured
+
+Some pieces use deployment-time secrets. Others use request-time credentials. Others use stored OAuth tokens. The piece auth model decides which pattern applies.
+
+## Quick reference
+
+### A piece is
+
+- one integration
+- identified by `name`
+- made of auth, actions, and optional triggers
+- registered in the central registry
+- exposed through worker routes
+
+### Native piece registration
+
+```ts
+registerPiece(myPiece)
+```
+
+### AP piece registration
+
+```ts
+registerApPiece('slack', slackPiece)
+```
+
+### Runtime discovery route
+
+```text
+GET /pieces
+```
+
+## Source files
+
+If you want to trace the behavior in code, start here:
+
+- `src/framework/piece.ts` — native piece builder
+- `src/framework/types.ts` — piece, action, and trigger types
+- `src/framework/registry.ts` — registration and discovery
+- `src/compat/activepieces.ts` — AP compatibility helpers
+- `src/pieces/index.ts` — runtime piece registration
+- `src/pieces/npm-slack.ts` — AP wrapper example
+- `src/pieces/gmail.ts` — native piece example
+- `docs/actions.md` — action behavior
+- `docs/triggers.md` — webhook and queue trigger behavior
+- `docs/pooling.md` — polling behavior

@@ -1,0 +1,306 @@
+# Install and bootstrap
+
+This guide explains the repository bootstrap script:
+
+```text
+scripts/install.sh
+```
+
+Use it when you want to set up this repository for local development without doing every step by hand.
+
+If you want the fastest end-to-end path, read [`docs/quick-start.md`](./quick-start.md). This page is the detailed reference for the install script itself.
+
+## What the script is for
+
+`scripts/install.sh` is a local setup helper for contributors and evaluators.
+
+It handles the repetitive parts of first-time setup:
+
+- checking that Node.js is new enough
+- ensuring `pnpm` is available
+- installing dependencies
+- creating a local `.env` file when needed
+- writing local-friendly defaults into `.env`
+- optionally running checks or building the admin UI
+
+It is meant to get you to a usable local development environment quickly.
+
+## What the script does
+
+By default, the script:
+
+1. verifies that Node.js 20 or newer is installed
+2. ensures `pnpm` is available, using `corepack` when possible
+3. copies `.env.example` to `.env` if `.env` does not already exist
+4. rewrites a few values for local development
+5. installs project dependencies with `pnpm install`
+6. prints the next steps for running the local worker
+
+## What the script changes in `.env`
+
+When the script creates a new `.env`, it writes local-first defaults.
+
+### Local defaults it sets
+
+| Variable | Local value |
+| --- | --- |
+| `FREEPIECES_PUBLIC_URL` | `http://localhost:8787` |
+| `FREEPIECES_URL` | `http://localhost:8787` |
+| `TOKEN_STORE_ID` | `00000000000000000000000000000000` |
+| `RUN_API_KEY` | commented out by default |
+| `ADMIN_SIGNING_KEY` | generated automatically |
+
+### Why those defaults exist
+
+They make it easy to:
+
+- run `wrangler dev` locally
+- use the fallback bearer auth mode locally
+- open the admin UI locally
+- smoke-test the built-in example pieces before you provision real Cloudflare resources
+
+## What the script does not do
+
+The script does not provision remote infrastructure.
+
+It does **not**:
+
+- create a real Cloudflare KV namespace
+- deploy the worker
+- set Cloudflare secrets in your account
+- create Gmail, Slack, or other provider credentials
+
+That separation is intentional. The install script prepares the repo. Deployment and provider integration setup happen later.
+
+## Basic usage
+
+Run the script from the repository root:
+
+```bash
+bash scripts/install.sh
+```
+
+You can also execute it directly if it already has execute permissions:
+
+```bash
+./scripts/install.sh
+```
+
+## Options
+
+### `--skip-install`
+
+Skip `pnpm install`.
+
+Use this when:
+
+- dependencies are already installed
+- you only want the `.env` bootstrap behavior
+- you are iterating on the script itself
+
+Example:
+
+```bash
+bash scripts/install.sh --skip-install
+```
+
+### `--check`
+
+Run `npm run check` after setup.
+
+Use this when you want an immediate type-check pass after bootstrapping.
+
+Example:
+
+```bash
+bash scripts/install.sh --check
+```
+
+### `--build-admin`
+
+Run `npm run build:admin` after setup.
+
+Use this when you want the admin UI ready right away for local testing.
+
+Example:
+
+```bash
+bash scripts/install.sh --build-admin
+```
+
+### `--overwrite-env`
+
+Replace the existing `.env` with a fresh local-friendly version.
+
+Use this carefully.
+
+This is useful when:
+
+- your current `.env` is stale
+- you want to reset to local defaults
+- you want a clean local bootstrap again
+
+Example:
+
+```bash
+bash scripts/install.sh --overwrite-env
+```
+
+### `--help`
+
+Show usage help.
+
+```bash
+bash scripts/install.sh --help
+```
+
+## Safe behavior with existing `.env`
+
+If `.env` already exists, the script leaves it alone by default.
+
+That is an important safety feature. It avoids overwriting real credentials or local customizations unless you explicitly ask for it with `--overwrite-env`.
+
+## Typical local setup flow
+
+A good first-run sequence looks like this:
+
+```bash
+bash scripts/install.sh
+npm run worker:dev
+```
+
+Then, in another terminal:
+
+```bash
+curl http://localhost:8787/health
+curl http://localhost:8787/pieces
+```
+
+For a simple smoke test without provider credentials:
+
+```bash
+curl -X POST http://localhost:8787/run/example-apikey/ping \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-token" \
+  -d '{"hello":"world"}'
+```
+
+## Relationship to the other setup files
+
+The bootstrap flow depends on a few nearby files.
+
+| File | Role |
+| --- | --- |
+| `.env.example` | source template for local `.env` |
+| `scripts/install.sh` | local bootstrap helper |
+| `scripts/deploy.sh` | build and deploy helper for Cloudflare |
+| `package.json` | dev, build, check, and test scripts |
+| `wrangler.toml.tmpl` | template used later by deploy flow |
+
+## When to switch from install to deploy
+
+Use `scripts/install.sh` for local setup.
+
+Use `scripts/deploy.sh` when you are ready to:
+
+- create or use a real KV namespace
+- set Cloudflare secrets
+- generate `wrangler.toml` from real environment values
+- deploy the worker to Cloudflare Workers
+
+A common progression is:
+
+1. bootstrap locally with `scripts/install.sh`
+2. verify the worker with `/health`, `/pieces`, and a local action call
+3. fill in real credentials in `.env`
+4. provision Cloudflare resources
+5. run `./scripts/deploy.sh --dry-run`
+6. deploy with `./scripts/deploy.sh`
+
+## Common questions
+
+### Why is `TOKEN_STORE_ID` a fake value after install?
+
+Because local bootstrap does not create Cloudflare resources. The placeholder is enough for a local-first walkthrough, but you must replace it before a real deployment.
+
+### Why is `RUN_API_KEY` commented out by default?
+
+Because local development is easier when the worker uses the bearer fallback mode. Once you want secured local or deployed behavior, uncomment it and use a real `fp_sk_...` value.
+
+### Why does the script generate `ADMIN_SIGNING_KEY` automatically?
+
+The local admin UI needs a signing key for admin sessions. Generating one automatically removes one more manual setup step.
+
+### Do I need Gmail or Slack credentials to get started?
+
+No. You can bootstrap the repo and smoke-test it locally with the built-in `example-apikey` piece before adding any real provider credentials.
+
+## Troubleshooting
+
+### `Node.js 20+ is required`
+
+Install a newer Node.js version and rerun the script.
+
+### `pnpm is not installed and corepack is unavailable`
+
+Install `pnpm` manually or install a Node.js distribution that includes `corepack`.
+
+### `.env` did not change
+
+If `.env` already existed, that is expected. Use `--overwrite-env` if you want to replace it.
+
+### I want the admin UI right away
+
+Run:
+
+```bash
+bash scripts/install.sh --build-admin
+```
+
+### I want a type-check during setup
+
+Run:
+
+```bash
+bash scripts/install.sh --check
+```
+
+## Quick reference
+
+### Basic bootstrap
+
+```bash
+bash scripts/install.sh
+```
+
+### Bootstrap and type-check
+
+```bash
+bash scripts/install.sh --check
+```
+
+### Bootstrap and build admin
+
+```bash
+bash scripts/install.sh --build-admin
+```
+
+### Replace existing `.env`
+
+```bash
+bash scripts/install.sh --overwrite-env
+```
+
+### Show help
+
+```bash
+bash scripts/install.sh --help
+```
+
+## Related docs
+
+- [`docs/quick-start.md`](./quick-start.md) — end-to-end setup and first smoke test
+- [`docs/pieces.md`](./pieces.md) — how pieces are structured and registered
+- [`docs/actions.md`](./actions.md) — how to run actions
+- [`docs/triggers.md`](./triggers.md) — webhook and queue triggers
+- [`docs/pooling.md`](./pooling.md) — polling triggers such as Gmail

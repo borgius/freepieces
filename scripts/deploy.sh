@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh – one-shot deployment script for freepieces Cloudflare Worker
+# scripts/deploy.sh – one-shot deployment script for freepieces Cloudflare Worker
 #
 # Prerequisites (already provisioned if you ran this before):
 #   - wrangler installed and authenticated  (wrangler whoami)
@@ -9,14 +9,16 @@
 #       Per-piece OAuth secrets, e.g. GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
 #
 # Usage:
-#   ./deploy.sh                   # build + deploy
-#   ./deploy.sh --rotate-key      # regenerate TOKEN_ENCRYPTION_KEY and deploy
-#   ./deploy.sh --dry-run         # type-check + build only, no deploy
+#   ./scripts/deploy.sh                   # build + deploy
+#   ./scripts/deploy.sh --rotate-key      # regenerate TOKEN_ENCRYPTION_KEY and deploy
+#   ./scripts/deploy.sh --dry-run         # type-check + build only, no deploy
 
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # Load environment variables from .env (gitignored)
-ENV_FILE="$(dirname "$0")/.env"
+ENV_FILE="$ROOT_DIR/.env"
 if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   set -o allexport && source "$ENV_FILE" && set +o allexport
@@ -27,8 +29,8 @@ else
 fi
 
 # ── Generate wrangler.toml from template + .env ──────────────────────────────
-TMPL="$(dirname "$0")/wrangler.toml.tmpl"
-OUTPUT="$(dirname "$0")/wrangler.toml"
+TMPL="$ROOT_DIR/wrangler.toml.tmpl"
+OUTPUT="$ROOT_DIR/wrangler.toml"
 if ! command -v envsubst &>/dev/null; then
   echo "Error: 'envsubst' not found. Install gettext: brew install gettext"
   exit 1
@@ -116,4 +118,4 @@ echo "    Pieces     : $PUBLIC_URL/pieces"
 echo "    Admin UI   : $PUBLIC_URL/admin/"
 echo ""
 echo "To update piece OAuth credentials run: wrangler secret put <PIECE>_CLIENT_ID and wrangler secret put <PIECE>_CLIENT_SECRET"
-echo "To rotate the encryption key run: ./deploy.sh --rotate-key"
+echo "To rotate the encryption key run: ./scripts/deploy.sh --rotate-key"

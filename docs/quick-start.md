@@ -1,0 +1,366 @@
+# Quick start
+
+This guide gets you from a fresh clone to a working local `freepieces` worker.
+
+It covers two paths:
+
+- a **local-first smoke test** that works without Gmail or Slack credentials
+- the **next steps for real integrations and Cloudflare deployment**
+
+If you want the conceptual docs, start here too:
+
+- [`docs/pieces.md`](./pieces.md)
+- [`docs/actions.md`](./actions.md)
+- [`docs/triggers.md`](./triggers.md)
+- [`docs/pooling.md`](./pooling.md)
+
+## What you will have at the end
+
+After this guide, you will be able to:
+
+- install the project dependencies
+- create a local `.env`
+- start the Worker locally
+- verify `/health` and `/pieces`
+- run a simple action call against the built-in `example-apikey` piece
+- move on to Gmail, Slack, or deployment when you are ready
+
+## Prerequisites
+
+You need:
+
+- Node.js 20 or newer
+- `pnpm` or `corepack`
+- Git
+
+You also need a Cloudflare account if you want to:
+
+- deploy the worker
+- create a real KV namespace
+- run OAuth-backed integrations against persisted tokens
+
+## 1. Clone the repository
+
+```bash
+git clone https://github.com/borgius/freepieces.git
+cd freepieces
+```
+
+## 2. Bootstrap the repo
+
+Run the local bootstrap script:
+
+```bash
+bash scripts/install.sh
+```
+
+If you want the detailed script reference, read [`docs/install.md`](./install.md).
+
+Useful options:
+
+```bash
+bash scripts/install.sh --check
+bash scripts/install.sh --build-admin
+bash scripts/install.sh --overwrite-env
+```
+
+### What the script does
+
+The script:
+
+- verifies Node.js and `pnpm`
+- installs dependencies
+- creates `.env` from `.env.example` when needed
+- rewrites a few values for local development:
+  - `FREEPIECES_PUBLIC_URL=http://localhost:8787`
+  - `FREEPIECES_URL=http://localhost:8787`
+  - `TOKEN_STORE_ID=00000000000000000000000000000000`
+  - `RUN_API_KEY` commented out by default
+  - `ADMIN_SIGNING_KEY` generated automatically
+
+### What the script does not do
+
+The script does not:
+
+- create a real Cloudflare KV namespace
+- deploy the worker
+- create provider credentials for Gmail or Slack
+
+That is deliberate. The goal is to make local exploration easy first.
+
+## 3. Review `.env`
+
+After the bootstrap script runs, review `.env`.
+
+For a local smoke test, you can usually leave most placeholders alone. The important local defaults are already set.
+
+### Local-first defaults
+
+The generated `.env` is optimized for local development:
+
+- `FREEPIECES_PUBLIC_URL` points to `http://localhost:8787`
+- `FREEPIECES_URL` points to `http://localhost:8787`
+- `RUN_API_KEY` is commented out, so local requests can use the bearer fallback mode
+
+### Values you will need later
+
+Before you deploy or use real provider integrations, you should replace these placeholders:
+
+- `TOKEN_STORE_ID`
+- `RUN_API_KEY`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `SLACK_BOT_TOKEN`
+- any other provider-specific credentials you plan to use
+
+## 4. Start the worker locally
+
+Run:
+
+```bash
+npm run worker:dev
+```
+
+Keep that terminal open.
+
+If you want to open the admin UI locally, build it once first:
+
+```bash
+npm run build:admin
+```
+
+Then the useful local URLs are:
+
+- `http://localhost:8787/health`
+- `http://localhost:8787/pieces`
+- `http://localhost:8787/admin/`
+
+## 5. Verify the worker is alive
+
+In another terminal, check the health endpoint:
+
+```bash
+curl http://localhost:8787/health
+```
+
+You should get a JSON response with `ok: true`.
+
+Next, list the registered pieces:
+
+```bash
+curl http://localhost:8787/pieces
+```
+
+You should see the built-in pieces such as:
+
+- `gmail`
+- `example-oauth`
+- `example-apikey`
+- any installed npm wrappers such as `slack`
+
+## 6. Run a smoke test without third-party credentials
+
+The easiest local test uses the built-in `example-apikey` piece.
+
+Call its `ping` action:
+
+```bash
+curl -X POST http://localhost:8787/run/example-apikey/ping \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-token" \
+  -d '{"hello":"world"}'
+```
+
+Why this works:
+
+- in local dev, `RUN_API_KEY` is not enabled by default
+- the bearer token becomes the fallback runtime credential
+- `example-apikey` treats that as its direct API key
+
+You should see a result that includes:
+
+- `ok: true`
+- `authConfigured: true`
+- your echoed props
+
+If you want a second easy test, try the `echo` action:
+
+```bash
+curl -X POST http://localhost:8787/run/example-apikey/echo \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-token" \
+  -d '{"message":"hello from quick start"}'
+```
+
+## 7. Try a real integration when you are ready
+
+Once the worker is running locally, you can move on to real provider integrations.
+
+### Gmail
+
+To use Gmail actions:
+
+1. create Google OAuth credentials
+2. set `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET`
+3. authorize a Gmail account
+4. call Gmail actions
+
+The repository already includes an example flow:
+
+```bash
+npx tsx examples/gmail-example.ts --authorize
+npx tsx examples/gmail-example.ts
+```
+
+The first command prints the login URL. After you complete the OAuth flow in the browser, the second command sends and searches mail.
+
+### Slack
+
+To use Slack actions:
+
+1. set `SLACK_BOT_TOKEN`
+2. set `SLACK_CHANNEL`
+3. optionally set `SLACK_USER_ID`
+4. run the example script
+
+```bash
+npx tsx examples/slack-example.ts --actions
+```
+
+That script uses the same runtime contract documented in [`docs/actions.md`](./actions.md).
+
+## 8. Understand what happens next
+
+After the smoke test, most users branch into one of these paths:
+
+- **piece architecture** → read [`docs/pieces.md`](./pieces.md)
+- **calling actions** → read [`docs/actions.md`](./actions.md)
+- **webhook and queue triggers** → read [`docs/triggers.md`](./triggers.md)
+- **polling triggers such as Gmail** → read [`docs/pooling.md`](./pooling.md)
+
+## 9. Deploy to Cloudflare
+
+When you are ready to deploy, switch from local defaults to real Cloudflare resources.
+
+### Step 1: create a KV namespace
+
+```bash
+wrangler kv namespace create TOKEN_STORE
+```
+
+Copy the returned namespace ID into `.env` as `TOKEN_STORE_ID`.
+
+### Step 2: set a real public URL and runtime key
+
+Update `.env` with real values for:
+
+- `FREEPIECES_PUBLIC_URL`
+- `FREEPIECES_URL`
+- `RUN_API_KEY`
+
+Use an `fp_sk_...` style value for `RUN_API_KEY`.
+
+### Step 3: set required secrets
+
+At a minimum, you usually need:
+
+```bash
+wrangler secret put TOKEN_ENCRYPTION_KEY
+wrangler secret put ADMIN_USER
+wrangler secret put ADMIN_PASSWORD
+wrangler secret put ADMIN_SIGNING_KEY
+```
+
+Then add provider-specific secrets such as:
+
+```bash
+wrangler secret put GMAIL_CLIENT_ID
+wrangler secret put GMAIL_CLIENT_SECRET
+```
+
+### Step 4: do a dry run
+
+```bash
+./scripts/deploy.sh --dry-run
+```
+
+### Step 5: deploy
+
+```bash
+./scripts/deploy.sh
+```
+
+### Step 6: verify the deployed worker
+
+Check:
+
+- `https://<your-worker>.workers.dev/health`
+- `https://<your-worker>.workers.dev/pieces`
+- `https://<your-worker>.workers.dev/admin/`
+
+## Troubleshooting
+
+### `pnpm` is missing
+
+Run the bootstrap script again. It will try to activate `pnpm` through `corepack` when possible.
+
+### Local requests return `Unauthorized`
+
+Check whether `RUN_API_KEY` is enabled in your `.env`. For the easiest local setup, keep it commented out until you want secured local requests.
+
+### `/pieces` works but Gmail fails
+
+That usually means the piece is registered but OAuth is not configured yet. Set the Gmail client credentials and run the authorization flow.
+
+### `TOKEN_STORE_ID` is still a dummy value
+
+That is fine for the local-first walkthrough. Replace it with a real namespace ID before deployment.
+
+## Quick reference
+
+### Bootstrap
+
+```bash
+bash scripts/install.sh
+```
+
+### Start local worker
+
+```bash
+npm run worker:dev
+```
+
+### Health check
+
+```bash
+curl http://localhost:8787/health
+```
+
+### Piece list
+
+```bash
+curl http://localhost:8787/pieces
+```
+
+### Local action smoke test
+
+```bash
+curl -X POST http://localhost:8787/run/example-apikey/ping \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-token" \
+  -d '{"hello":"world"}'
+```
+
+## Source files
+
+If you want to trace the setup flow in code, start here:
+
+- `docs/install.md` — detailed install-script reference
+- `scripts/install.sh` — local bootstrap helper
+- `.env.example` — environment variable template
+- `scripts/deploy.sh` — build and deploy helper
+- `package.json` — build, dev, check, and test scripts
+- `docs/actions.md` — action runtime details
+- `docs/triggers.md` — webhook and queue trigger details
+- `docs/pooling.md` — polling trigger details
+- `docs/pieces.md` — piece architecture and registration
