@@ -16,7 +16,7 @@ async function login(page: Page, username = 'admin', password = 'admin') {
 }
 
 async function logout(page: Page) {
-  await page.getByRole('button', { name: /log.?out/i }).click();
+  await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
 }
 
@@ -123,8 +123,8 @@ test.describe('Settings page', () => {
   });
 
   test('shows the Secrets section', async ({ page }) => {
-    // Sidebar
-    await expect(page.getByText('Secrets')).toBeVisible();
+    // Sidebar nav button
+    await expect(page.getByRole('button', { name: 'Secrets' })).toBeVisible();
     // Wait for secrets panel to load
     await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
   });
