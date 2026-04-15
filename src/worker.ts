@@ -454,6 +454,8 @@ interface WebhookSubscription {
   userId?: string;
   /** Direct runtime credential for API-key / CUSTOM_AUTH trigger execution. */
   pieceToken?: string;
+  /** Per-subscription CUSTOM_AUTH prop overrides, captured from X-Piece-Auth at subscribe time. */
+  pieceAuthProps?: Record<string, string>;
   createdAt: string;
 }
 
@@ -536,13 +538,14 @@ async function dispatchWebhook(
       const triggerDef = getTrigger(pieceName, sub.trigger);
       if (!triggerDef) return;
 
-      const auth = await resolveApRuntimeAuth(
+      let auth = await resolveApRuntimeAuth(
         pieceName,
         piece,
         env,
         sub.userId ?? sub.bearerToken,
         sub.pieceToken ?? sub.bearerToken,
       );
+      if (sub.pieceAuthProps) auth = { ...auth, ...sub.pieceAuthProps };
 
       let events: unknown[];
       try {
@@ -750,7 +753,7 @@ export default {
       if (!authResult.ok) {
         return json({ error: authResult.error }, { status: authResult.status });
       }
-      const { userId, pieceToken } = authResult.credentials;
+      const { userId, pieceToken, pieceAuthProps } = authResult.credentials;
 
       let auth: Record<string, string> | undefined;
 
@@ -776,6 +779,7 @@ export default {
           }
 
           auth = await resolveNativeRuntimeAuth(pieceName, piece.auth, env, userId, pieceToken);
+          if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
 
           result = await action.run({ auth, props, env });
 
@@ -788,6 +792,7 @@ export default {
           }
 
           auth = await resolveApRuntimeAuth(pieceName, piece, env, userId, pieceToken);
+          if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
 
           const apCtx = buildApContext(pieceName, piece, auth, props, env);
           result = await action.run(apCtx);
@@ -829,7 +834,7 @@ export default {
       if (!authResult.ok) {
         return json({ error: authResult.error }, { status: authResult.status });
       }
-      const { userId, pieceToken } = authResult.credentials;
+      const { userId, pieceToken, pieceAuthProps } = authResult.credentials;
 
       try {
         // ── Native piece trigger ────────────────────────────────────────────
@@ -837,7 +842,8 @@ export default {
           const nativeTrigger = stored.def.triggers?.find((t) => t.name === triggerName);
           if (!nativeTrigger) return json({ error: 'Trigger not found' }, { status: 404 });
 
-          const nativeAuth = await resolveNativeRuntimeAuth(pieceName, stored.def.auth, env, userId, pieceToken);
+          let nativeAuth = await resolveNativeRuntimeAuth(pieceName, stored.def.auth, env, userId, pieceToken);
+          if (pieceAuthProps) nativeAuth = { ...nativeAuth, ...pieceAuthProps };
 
           const nativeCtx: PieceTriggerContext = {
             auth: nativeAuth,
@@ -856,7 +862,8 @@ export default {
           return json({ error: 'Piece does not support triggers' }, { status: 400 });
         }
 
-        const auth = await resolveApRuntimeAuth(pieceName, stored.piece, env, userId, pieceToken);
+        let auth = await resolveApRuntimeAuth(pieceName, stored.piece, env, userId, pieceToken);
+        if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
         const ctx = buildApTriggerContext(
           pieceName,
           stored.piece,
@@ -1188,7 +1195,7 @@ export default {
       if (!authResult.ok) {
         return json({ error: authResult.error }, { status: authResult.status });
       }
-      const { userId, pieceToken } = authResult.credentials;
+      const { userId, pieceToken, pieceAuthProps } = authResult.credentials;
 
       let subBody: { callbackUrl?: string; queueName?: string; propsValue?: Record<string, unknown> };
       try {
@@ -1232,6 +1239,7 @@ export default {
         ...(callbackUrl ? { callbackUrl } : { queueName }),
         userId,
         pieceToken,
+        ...(pieceAuthProps ? { pieceAuthProps } : {}),
         createdAt: new Date().toISOString(),
       };
       await env.TOKEN_STORE.put(SUB_KEY(pieceName, subId), JSON.stringify(sub));

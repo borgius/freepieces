@@ -143,9 +143,10 @@ If `RUN_API_KEY` is configured on the worker, runtime endpoints use a split cont
 
 - `Authorization: Bearer <RUN_API_KEY>` — authenticates the caller
 - `X-User-Id: <userId>` — identifies which stored OAuth2 token to read from KV
-- `X-Piece-Token: <token>` — passes a direct runtime credential for API-key or `CUSTOM_AUTH` pieces
+- `X-Piece-Token: <token>` — passes a direct runtime credential for API-key or single-prop `CUSTOM_AUTH` pieces
+- `X-Piece-Auth: {"prop":"val",…}` — passes multiple named credentials for multi-prop `CUSTOM_AUTH` pieces; value must be a JSON object where every value is a string
 
-Use `X-User-Id` for OAuth2 pieces such as Gmail. Use `X-Piece-Token` for direct credentials such as Slack bot tokens or raw API keys. You may send both headers; the worker uses the one that matches the piece auth flow.
+Use `X-User-Id` for OAuth2 pieces such as Gmail. Use `X-Piece-Token` for a single direct credential such as a Slack bot token or API key. Use `X-Piece-Auth` when a `CUSTOM_AUTH` piece requires more than one named credential — for example `{"botToken":"xoxb-…","signingSecret":"…"}`. You may send multiple headers; the worker merges them in order.
 
 In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback for both modes. The SDK and examples also send `X-User-Id` / `X-Piece-Token` when available so local and deployed behavior stay aligned.
 
@@ -235,7 +236,7 @@ The admin UI also includes a **Docs** tab that renders the repository guides dir
 | AES-GCM encryption key | Cloudflare Secret | `openssl rand -hex 32` |
 | Per-user OAuth tokens | Cloudflare KV | AES-256-GCM encrypted, fresh random IV per write |
 | Runtime API key (`RUN_API_KEY`) | Cloudflare Secret | Prefix with `fp_sk_`; authenticates runtime callers |
-| Direct piece credentials | Request headers or Cloudflare Secrets | `X-Piece-Token` at runtime, or per-piece env secret |
+| Direct piece credentials | Request headers or Cloudflare Secrets | `X-Piece-Token` (single), `X-Piece-Auth` (multi-prop JSON), or per-piece env secret |
 
 OAuth state is a signed blob (`<payload>.<hmac-sha256>`). The callback handler rejects any state that fails HMAC verification.
 

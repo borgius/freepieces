@@ -83,7 +83,8 @@ Here is the route-level summary.
 | Admin username/password | `ADMIN_USER`, `ADMIN_PASSWORD` secrets | protect the admin UI and `/auth/tokens/:piece` |
 | Admin cookie signing key | `ADMIN_SIGNING_KEY` secret | signs the `__fp_admin` session cookie |
 | Piece OAuth client credentials | piece-specific secrets | for example `GMAIL_CLIENT_ID` |
-| Direct per-request credentials | runtime headers | usually `X-Piece-Token` |
+| Direct single-credential | `X-Piece-Token` header | maps to the first CUSTOM_AUTH prop or the raw token |
+| Direct multi-credential | `X-Piece-Auth` header | JSON object of named string props for multi-prop CUSTOM_AUTH |
 | Stored provider OAuth tokens | encrypted KV values | keyed by piece name and user ID |
 | Slack webhook signing secret | `SLACK_SIGNING_SECRET` secret | verifies inbound Slack requests |
 
@@ -252,12 +253,19 @@ Slack is the best example of this pattern in the current codebase.
 
 For AP pieces with `CUSTOM_AUTH`, the worker builds an auth object from secret-like properties.
 
-For example, if a piece expects a `botToken` prop, the worker can populate it from:
+For a piece that expects a `botToken` prop, the worker populates it from these sources in priority order:
 
-- `X-Piece-Token`, or
-- an environment secret derived from the piece name, such as `SLACK_BOT_TOKEN`
+1. a matching key inside `X-Piece-Auth` (highest priority)
+2. `X-Piece-Token` mapped to the **first** prop name only
+3. an environment secret derived from the piece name — for example `SLACK_BOT_TOKEN`
 
-The worker prefers explicit runtime values when they are present.
+When a piece requires **more than one credential**, use `X-Piece-Auth` instead of `X-Piece-Token`:
+
+```http
+X-Piece-Auth: {"botToken": "xoxb-abc123", "botToken2": "xoxb-xyz456"}
+```
+
+The value must be a flat JSON object where every value is a string. Non-string values are silently ignored. Malformed JSON is also silently ignored, so the prop falls through to the env-secret fallback.
 
 ### AP `SECRET_TEXT`
 
@@ -379,10 +387,10 @@ This is why simple local examples can work with just one bearer token.
 
 ### Header matrix
 
-| Mode | `Authorization` value | `X-User-Id` | `X-Piece-Token` | Typical use |
-| --- | --- | --- | --- | --- |
-| deployed secured worker | `RUN_API_KEY` | optional but common | optional but common | production |
-| local dev without `RUN_API_KEY` | user ID or raw token fallback | optional override | optional override | fast local testing |
+| Mode | `Authorization` value | `X-User-Id` | `X-Piece-Token` | `X-Piece-Auth` | Typical use |
+| --- | --- | --- | --- | --- | --- |
+| deployed secured worker | `RUN_API_KEY` | optional but common | optional: single-prop credential | optional: multi-prop CUSTOM_AUTH credentials | production |
+| local dev without `RUN_API_KEY` | user ID or raw token fallback | optional override | optional override | optional override | fast local testing |
 
 ### What `userId` actually is
 
@@ -505,13 +513,24 @@ Some pieces work best with a direct credential that the caller supplies at reque
 - Slack bot token
 - raw API key
 - plain access token passed directly by another trusted service
+- multiple named credentials for a multi-prop `CUSTOM_AUTH` piece
 
-### Secured worker example
+### Secured worker example — single credential
 
 ```http
 Authorization: Bearer <RUN_API_KEY>
 X-Piece-Token: <provider-token>
 ```
+
+### Secured worker example — multiple credentials
+
+```http
+Authorization: Bearer <RUN_API_KEY>
+X-Piece-Auth: {"botToken": "xoxb-abc123", "signingSecret": "abc..."}
+```
+
+`X-Piece-Auth` overrides the matching env secret for each prop name.
+You can mix both headers: `X-Piece-Token` still maps to the first prop; `X-Piece-Auth` then overrides any named props it contains on top of that.
 
 ### Local example
 
@@ -519,7 +538,7 @@ X-Piece-Token: <provider-token>
 Authorization: Bearer <provider-token>
 ```
 
-### Slack bot token example
+### Slack bot token example — single token
 
 For Slack's `CUSTOM_AUTH` path, the worker can map a direct runtime token into the AP auth object the Slack piece expects.
 
@@ -534,6 +553,21 @@ curl -X POST "https://<your-worker>.workers.dev/run/slack/send_channel_message" 
 		"channel": "C0123456789",
 		"text": "Hello from freepieces",
 		"sendAsBot": true
+	}'
+```
+
+### Slack bot token example — multiple tokens
+
+When a piece expects more than one credential, use `X-Piece-Auth` with a JSON object:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/slack/send_channel_message" \
+	-H "Content-Type: application/json" \
+	-H "Authorization: Bearer $RUN_API_KEY" \
+	-H "X-Piece-Auth: {\"botToken\":\"$BOT_TOKEN\",\"botToken2\":\"$BOT_TOKEN_2\"}" \
+	-d '{
+		"channel": "C0123456789",
+		"text": "Hello from freepieces"
 	}'
 ```
 
@@ -714,8 +748,14 @@ Flow:
 
 1. configure `RUN_API_KEY`
 2. send `Authorization: Bearer <RUN_API_KEY>`
-3. send `X-Piece-Token: <xoxb-...>`
+3. send `X-Piece-Token: <xoxb-...>` for a single token
 4. call `/run/slack/...` or `/subscriptions/slack/...`
+
+If the piece needs multiple named credentials, replace step 3 with:
+
+```http
+X-Piece-Auth: {"botToken": "xoxb-...", "botToken2": "xoxb-..."}
+```
 
 ### Scenario 3: AP OAuth2 piece with seeded tokens
 

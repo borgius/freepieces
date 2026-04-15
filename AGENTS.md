@@ -11,6 +11,7 @@ For any new feature, bug fix, or public behavior change, update every affected s
 - CLI scaffolding/config/help text (`src/cli/**`) when secrets, flags, or env vars change
 - Script/example entrypoints (`src/client/**`, `examples/**`) when runtime calling conventions change
 - `README.md` for any user-facing change
+- `docs/` for any change to auth headers, routes, or request contracts
 - Tests for every new behavior or new functionality
 
 Do not ship a worker-only change when the SDK, CLI, examples, or docs still describe the old contract.
@@ -21,9 +22,10 @@ When `RUN_API_KEY` is configured:
 
 - `Authorization: Bearer <RUN_API_KEY>` authenticates the caller
 - `X-User-Id: <userId>` selects the stored OAuth2 token from KV
-- `X-Piece-Token: <token>` carries a direct runtime credential for API-key or `CUSTOM_AUTH` pieces
+- `X-Piece-Token: <token>` carries a direct runtime credential for API-key or `CUSTOM_AUTH` pieces (maps to the **first** auth prop)
+- `X-Piece-Auth: {"prop":"val",…}` carries multiple named credentials for multi-prop `CUSTOM_AUTH` pieces; value is a JSON object of string key/value pairs
 
-When `RUN_API_KEY` is absent (local dev), the bearer token is the fallback for both modes. Prefer keeping `X-User-Id` and `X-Piece-Token` support wired in examples and clients so local and deployed behavior stay aligned.
+When `RUN_API_KEY` is absent (local dev), the bearer token is the fallback for both modes. Prefer keeping `X-User-Id`, `X-Piece-Token`, and `X-Piece-Auth` support wired in examples and clients so local and deployed behavior stay aligned.
 
 ## Validation before finishing
 

@@ -61,4 +61,90 @@ describe('resolveRuntimeRequestAuth', () => {
       },
     });
   });
+
+  describe('X-Piece-Auth', () => {
+    it('parses a valid JSON object into pieceAuthProps in local-dev mode', () => {
+      const result = resolveRuntimeRequestAuth(
+        new Headers({
+          authorization: 'Bearer fp_sk_local',
+          'x-piece-auth': JSON.stringify({ botToken: 'xoxb-one', botToken2: 'xoxb-two' }),
+        }),
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          userId: 'fp_sk_local',
+          pieceToken: 'fp_sk_local',
+          pieceAuthProps: { botToken: 'xoxb-one', botToken2: 'xoxb-two' },
+        },
+      });
+    });
+
+    it('parses X-Piece-Auth in secured mode and includes it in credentials', () => {
+      const result = resolveRuntimeRequestAuth(
+        new Headers({
+          authorization: 'Bearer fp_sk_expected',
+          'x-user-id': 'user-123',
+          'x-piece-auth': JSON.stringify({ apiKey: 'key-a', secretKey: 'key-b' }),
+        }),
+        'fp_sk_expected',
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          userId: 'user-123',
+          pieceAuthProps: { apiKey: 'key-a', secretKey: 'key-b' },
+        },
+      });
+    });
+
+    it('silently ignores malformed JSON in X-Piece-Auth', () => {
+      const result = resolveRuntimeRequestAuth(
+        new Headers({
+          authorization: 'Bearer fp_sk_expected',
+          'x-piece-auth': 'not-valid-json',
+        }),
+        'fp_sk_expected',
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {},
+      });
+    });
+
+    it('silently drops non-string values in X-Piece-Auth', () => {
+      const result = resolveRuntimeRequestAuth(
+        new Headers({
+          authorization: 'Bearer fp_sk_expected',
+          'x-piece-auth': JSON.stringify({ good: 'value', bad: 42, alsoGood: 'ok' }),
+        }),
+        'fp_sk_expected',
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          pieceAuthProps: { good: 'value', alsoGood: 'ok' },
+        },
+      });
+    });
+
+    it('ignores X-Piece-Auth when the object is empty after filtering', () => {
+      const result = resolveRuntimeRequestAuth(
+        new Headers({
+          authorization: 'Bearer fp_sk_expected',
+          'x-piece-auth': JSON.stringify({ num: 1, arr: [] }),
+        }),
+        'fp_sk_expected',
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {},
+      });
+    });
+  });
 });
