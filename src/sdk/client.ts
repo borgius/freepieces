@@ -53,9 +53,12 @@ function makePieceProxy<T>(
  * ```ts
  * import { createClient } from 'freepieces/sdk';
  *
+ * // Production — token is the shared RUN_API_KEY secret, userId identifies
+ * // the user whose stored OAuth2 token should be retrieved from KV.
  * const client = createClient({
  *   baseUrl: 'https://freepieces.example.workers.dev',
- *   token:   'my-secret-token',
+ *   token:   process.env.RUN_API_KEY,   // fp_sk_<hex32>
+ *   userId:  'alice@example.com',
  * });
  *
  * // Typed Gmail call
@@ -76,12 +79,14 @@ export interface FreePiecesClient extends KnownPieces {}
 export class FreePiecesClient {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
+  private readonly userId: string | undefined;
   private readonly fetchFn: typeof globalThis.fetch;
 
   constructor(options: FreePiecesClientOptions) {
     const url = options.baseUrl.replace(/\/$/, '');
     this.baseUrl  = url;
     this.token    = options.token;
+    this.userId   = options.userId;
     this.fetchFn  = options.fetch ?? globalThis.fetch.bind(globalThis);
 
     // Populate a typed proxy for every registered piece.
@@ -95,7 +100,14 @@ export class FreePiecesClient {
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = { 'content-type': 'application/json' };
-    if (this.token) h['authorization'] = `Bearer ${this.token}`;
+    if (this.token) {
+      // Production: token is the shared RUN_API_KEY; userId goes in X-User-Id.
+      h['authorization'] = `Bearer ${this.token}`;
+      if (this.userId) h['x-user-id'] = this.userId;
+    } else if (this.userId) {
+      // Local dev / no API key: userId is the bearer token (legacy compat).
+      h['authorization'] = `Bearer ${this.userId}`;
+    }
     return h;
   }
 

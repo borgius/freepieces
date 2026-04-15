@@ -37,6 +37,11 @@ const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
 const USER_ID = process.env['USER_ID'] ?? 'your-user-id';
 const RECIPIENT_EMAIL = process.env['RECIPIENT_EMAIL'] ?? 'your@email.com';
 
+// When RUN_API_KEY is set the Authorization header carries the shared secret and
+// the userId is sent separately as X-User-Id.  When absent (local dev) the
+// bearer token IS the userId (backward-compatible).
+const RUN_API_KEY = process.env['RUN_API_KEY'];
+
 const PIECE = 'gmail';
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -56,12 +61,16 @@ async function get(path: string): Promise<unknown> {
  * OAuth token from KV using it as the key.
  */
 async function run(action: string, props: Record<string, unknown>): Promise<unknown> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${RUN_API_KEY ?? USER_ID}`,
+  };
+  if (RUN_API_KEY) {
+    headers['x-user-id'] = USER_ID;
+  }
   const res = await fetch(`${BASE_URL}/run/${PIECE}/${action}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${USER_ID}`,
-    },
+    headers,
     body: JSON.stringify(props),
   });
   const json = await res.json() as { ok: boolean; result?: unknown; error?: string };

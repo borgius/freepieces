@@ -40,6 +40,21 @@ export interface Env {
    */
   ADMIN_SIGNING_KEY?: string;
 
+  /**
+   * Optional shared secret that gates all /run, /trigger, and /subscriptions
+   * endpoints. When set, every request to those routes must carry:
+   *   Authorization: Bearer <RUN_API_KEY>
+   * and the userId (for OAuth2 KV lookups) must be sent separately as:
+   *   X-User-Id: <userId>
+   *
+   * When absent (e.g. local dev with wrangler dev), the bearer token is
+   * treated as the userId directly (backward-compatible behaviour).
+   *
+   * Generate with:  openssl rand -hex 32
+   * Store with:     wrangler secret put RUN_API_KEY
+   */
+  RUN_API_KEY?: string;
+
   [key: string]: unknown;
 }
 

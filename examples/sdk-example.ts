@@ -3,8 +3,12 @@
  *
  * Run with:
  *   FREEPIECES_URL=https://freepieces.example.workers.dev \
- *   FREEPIECES_TOKEN=my-secret-token \
+ *   RUN_API_KEY=fp_sk_<your-key> \
+ *   USER_ID=alice@example.com \
  *   node --import tsx examples/sdk-example.ts
+ *
+ * Local dev (no RUN_API_KEY — worker runs without the gating secret):
+ *   FREEPIECES_URL=http://localhost:8787 USER_ID=alice npx tsx examples/sdk-example.ts
  */
 
 import { createClient } from '../src/sdk/index.js';
@@ -14,7 +18,10 @@ import type { GmailMessage, GmailSearchResult } from '../src/sdk/index.js';
 
 const client = createClient({
   baseUrl: process.env['FREEPIECES_URL'] ?? 'http://localhost:8787',
-  token:   process.env['FREEPIECES_TOKEN'],
+  // In production: RUN_API_KEY is the shared secret, USER_ID is separate.
+  // In local dev:  only USER_ID is needed (sent as the bearer token).
+  token:  process.env['RUN_API_KEY'],
+  userId: process.env['USER_ID'],
 });
 
 async function main(): Promise<void> {

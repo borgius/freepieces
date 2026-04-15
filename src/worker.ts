@@ -578,6 +578,23 @@ export default {
       const authHeader = request.headers.get('authorization');
       const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
 
+      // Security gate: if RUN_API_KEY is configured the bearer token must match
+      // it exactly (timing-safe comparison). The userId for KV lookups then comes
+      // from the X-User-Id header instead.
+      // When RUN_API_KEY is absent (local dev), the bearer token IS the userId.
+      //
+      // Convention (adopted from Activepieces): API keys should be prefixed with
+      // "fp_sk_" so they are recognisable in logs and distinct from OAuth tokens.
+      // The worker accepts any value but the CLI/SDK generate fp_sk_<hex32> keys.
+      if (env.RUN_API_KEY) {
+        if (!bearerToken || !timingSafeEqual(bearerToken, env.RUN_API_KEY)) {
+          return json({ error: 'Unauthorized' }, { status: 401 });
+        }
+      }
+      const userId = env.RUN_API_KEY
+        ? (request.headers.get('x-user-id') ?? undefined)
+        : bearerToken;
+
       let auth: Record<string, string> | undefined;
 
       // Parse request body
@@ -601,10 +618,10 @@ export default {
             return json({ error: 'Action not found' }, { status: 404 });
           }
 
-          if (bearerToken) {
+          if (userId) {
             if (piece.auth.type === 'oauth2') {
               const storedRecord = env.TOKEN_STORE
-                ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+                ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
                     console.error('[freepieces] Failed to retrieve token from KV:', err);
                     return null;
                   })
@@ -618,7 +635,7 @@ export default {
                   stored.def.auth as OAuth2AuthDefinition,
                   env,
                   pieceName,
-                  bearerToken,
+                  userId,
                 ).catch((err) => {
                   console.error('[freepieces] Token refresh error:', err);
                   return storedRecord;
@@ -629,10 +646,10 @@ export default {
                   ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
                 };
               } else {
-                auth = { token: bearerToken, accessToken: bearerToken };
+                auth = { token: userId, accessToken: userId };
               }
             } else {
-              auth = { token: bearerToken };
+              auth = { token: userId };
             }
           }
 
@@ -646,10 +663,10 @@ export default {
             return json({ error: 'Action not found' }, { status: 404 });
           }
 
-          if (bearerToken) {
-            // Try KV lookup first — bearer token may be a userId key for stored OAuth2 tokens.
+          if (userId) {
+            // Try KV lookup first — userId may be a key for stored OAuth2 tokens.
             const storedRecord = env.TOKEN_STORE
-              ? await getToken(env.TOKEN_STORE, pieceName, bearerToken, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+              ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
                   console.error('[freepieces] KV lookup failed for AP piece:', err);
                   return null;
                 })
@@ -675,7 +692,7 @@ export default {
                   oauth2Def,
                   env,
                   pieceName,
-                  bearerToken,
+                  userId,
                 ).catch((err) => {
                   console.error('[freepieces] AP piece token refresh error:', err);
                   return storedRecord;
@@ -688,7 +705,7 @@ export default {
                 ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
               };
             } else {
-              auth = { token: bearerToken };
+              auth = { token: userId };
             }
           }
 

@@ -33,3 +33,10 @@ binding = "ASSETS"
 #   wrangler secret put ADMIN_USER
 #   wrangler secret put ADMIN_PASSWORD
 #   wrangler secret put ADMIN_SIGNING_KEY      # 32 random hex bytes → openssl rand -hex 32
+#
+# Run-endpoint API key — gates /run, /trigger, and /subscriptions (optional but recommended):
+#   wrangler secret put RUN_API_KEY            # 32 random hex bytes → openssl rand -hex 32
+# Convention: prefix value with fp_sk_ so it is recognisable in logs (e.g. fp_sk_<hex32>).
+# When set, callers must send:
+#   Authorization: Bearer <RUN_API_KEY>
+#   X-User-Id: <userId>               ← userId for OAuth2 KV lookups

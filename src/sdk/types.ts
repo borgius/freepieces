@@ -10,10 +10,28 @@ export interface FreePiecesClientOptions {
    */
   baseUrl: string;
   /**
-   * Bearer token / predefined API key.
-   * Sent as `Authorization: Bearer <token>` on every request.
+   * Shared API key that gates the /run endpoint.
+   * Must match the `RUN_API_KEY` Cloudflare Secret on the worker.
+   * Should be prefixed with `fp_sk_` (e.g. `fp_sk_<hex32>`) so it is
+   * recognisable in logs and different from OAuth user tokens.
+   *
+   * When set, send as `Authorization: Bearer <token>` and pass `userId`
+   * separately via `X-User-Id`.
+   *
+   * When absent (local dev without RUN_API_KEY), the userId is sent as
+   * the bearer token directly (backward-compatible behaviour).
    */
   token?: string;
+  /**
+   * The user identity used as the KV lookup key for stored OAuth2 tokens.
+   * Required in production (when `token` is a shared API key) so the
+   * worker knows whose token to retrieve.
+   *
+   * In local dev (no `token`) this is sent as the bearer token itself.
+   *
+   * @example 'alice@example.com'
+   */
+  userId?: string;
   /**
    * Optional custom fetch implementation.
    * Defaults to the global `fetch`.
