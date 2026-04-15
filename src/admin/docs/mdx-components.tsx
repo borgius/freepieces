@@ -93,14 +93,10 @@ function DocCode({ className, children, ...props }: ComponentPropsWithoutRef<'co
         as="code"
         display="block"
         minW="max-content"
-        rounded="xl"
-        bg="gray.950"
-        color="gray.50"
+        color="gray.100"
         fontFamily="mono"
         fontSize="sm"
         lineHeight="1.7"
-        px={4}
-        py={3}
         whiteSpace="pre"
         {...props}
       >
@@ -222,7 +218,17 @@ export function createDocsMdxComponents({ onNavigateDoc }: DocsMdxComponentOptio
       );
     },
     pre: ({ children }: { children: ReactNode }) => (
-      <Box as="pre" my={6} overflowX="auto">
+      <Box
+        as="pre"
+        my={6}
+        rounded="xl"
+        bg="gray.950"
+        borderWidth="1px"
+        borderColor="gray.800"
+        overflowX="auto"
+        px={5}
+        py={4}
+      >
         {children}
       </Box>
     ),

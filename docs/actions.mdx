@@ -13,6 +13,8 @@ This document explains how actions work in freepieces.
 
 Use an action when you want the worker to **do something now** and return the result in the HTTP response.
 
+If you want the full auth picture before you call runtime routes, read [Authentication](./auth.mdx).
+
 Examples:
 
 - send an email with Gmail
@@ -145,6 +147,8 @@ POST /run/Gmail/Send Email
 ## Runtime auth contract
 
 Actions use the same runtime auth contract as the other runtime endpoints.
+
+For the full mental model, including admin auth, OAuth storage, token seeding, and webhook verification, read [Authentication](./auth.mdx).
 
 ### When `RUN_API_KEY` is configured
 

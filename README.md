@@ -87,6 +87,7 @@ Run `fp --help` or `fp <command> --help` for full options.
 
 - `docs/quick-start.mdx` — bootstrap the repo locally, run a smoke test, and deploy to Cloudflare
 - `docs/install.mdx` — detailed reference for the local bootstrap flow
+- `docs/auth.mdx` — detailed auth guide covering runtime headers, OAuth storage, admin sessions, and webhook verification
 - `scripts/install.sh` — local bootstrap helper for this repository
 - `docs/pieces.mdx` — piece architecture, registration, and native vs AP pieces
 - `docs/actions.mdx` — action runtime contract and examples

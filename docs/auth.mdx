@@ -1,0 +1,973 @@
+export const meta = {
+	slug: 'auth',
+	title: 'Authentication',
+	summary: 'Understand every auth layer in freepieces: Cloudflare secrets, runtime headers, OAuth storage, admin sessions, and webhook signature checks.',
+	section: 'runtime',
+	order: 30,
+	estimatedTime: '14 min',
+}
+
+# Authentication in freepieces
+
+This is the detailed auth guide for `freepieces`.
+
+If you have ever asked yourself one of these questions, you are in the right place:
+
+- Why do I send `Authorization: Bearer <RUN_API_KEY>` **and** `X-User-Id`?
+- When should I use `X-Piece-Token`?
+- Where are OAuth tokens stored?
+- What is the difference between admin login and runtime auth?
+- Why does Gmail use one flow while Slack bot tokens use another?
+- What happens in local dev when `RUN_API_KEY` is not set?
+
+The short answer is that `freepieces` has **several different auth layers**, and each one protects a different thing.
+
+If you want the route details after this guide, continue with [Actions](./actions.mdx), [Triggers](./triggers.mdx), [Polling triggers](./pooling.mdx), and [Pieces](./pieces.mdx).
+
+## The mental model
+
+Think about auth in `freepieces` as five separate layers.
+
+| Layer | Purpose | Examples |
+| --- | --- | --- |
+| Cloudflare config auth | Protect infrastructure-level secrets and bindings | `TOKEN_ENCRYPTION_KEY`, `ADMIN_PASSWORD`, `RUN_API_KEY`, `TOKEN_STORE` |
+| Runtime caller auth | Decide whether a caller is allowed to use `/run`, `/trigger`, and `/subscriptions` | `Authorization: Bearer <RUN_API_KEY>` |
+| Provider credential auth | Give the piece credentials to talk to Gmail, Slack, or another provider | stored OAuth token, Slack bot token, raw API key |
+| Admin auth | Protect the admin UI and admin-only APIs | `/admin/api/login`, `__fp_admin` cookie |
+| Inbound webhook authenticity | Verify that incoming provider webhooks are genuine | Slack signing secret on `/webhook/slack` |
+
+Those layers are related, but they are not the same.
+
+That distinction matters a lot.
+
+For example:
+
+- `RUN_API_KEY` proves that **your caller may use the worker**.
+- A Gmail OAuth token proves that **the piece may call Gmail for one user**.
+- `ADMIN_USER` and `ADMIN_PASSWORD` prove that **someone may use the admin UI**.
+- `SLACK_SIGNING_SECRET` proves that **an inbound Slack webhook really came from Slack**.
+
+If you keep those roles separate in your head, the rest of the system becomes much easier to understand.
+
+## The auth surfaces at a glance
+
+Here is the route-level summary.
+
+| Route | Who calls it | Auth required | What it protects |
+| --- | --- | --- | --- |
+| `GET /health` | anyone | none | health check only |
+| `GET /pieces` | anyone | none | metadata only |
+| `GET /auth/login/:piece?userId=...` | browser/user | none at worker level | starts browser OAuth for native OAuth2 pieces |
+| `GET /auth/callback/:piece` | provider redirect | signed `state` parameter | finishes native OAuth2 flow and stores token |
+| `POST /auth/tokens/:piece` | admin/operator | HTTP Basic auth with `ADMIN_USER` / `ADMIN_PASSWORD` | seeds tokens directly into KV |
+| `POST /run/:piece/:action` | app, script, SDK | runtime auth | executes an action |
+| `POST /trigger/:piece/:trigger` | app, script, SDK | runtime auth | executes a trigger directly |
+| `POST /subscriptions/:piece/:trigger` | app, script, SDK | runtime auth | creates a stored subscription |
+| `GET /subscriptions/:piece` | app, script, SDK | runtime auth | lists subscriptions for the current runtime identity |
+| `DELETE /subscriptions/:piece/:trigger/:id` | app, script, SDK | runtime auth | deletes a subscription for the current runtime identity |
+| `POST /webhook/:piece` | provider webhook | provider-specific validation, if configured | receives inbound webhooks |
+| `POST /admin/api/login` | browser/admin UI | username + password JSON body | creates admin session cookie |
+| `POST /admin/api/logout` | browser/admin UI | none required to clear cookie | clears admin session |
+| `GET /admin/api/me` and other protected `/admin/api/*` routes | browser/admin UI | `__fp_admin` signed cookie | admin panel access |
+
+## Where auth data lives
+
+`freepieces` uses different storage locations for different kinds of credentials.
+
+| Data | Where it lives | Notes |
+| --- | --- | --- |
+| Public Worker URL | `FREEPIECES_PUBLIC_URL` var | used to build callback and webhook URLs |
+| Token store binding | `TOKEN_STORE` KV binding | stores encrypted OAuth tokens and admin state |
+| Token encryption key | `TOKEN_ENCRYPTION_KEY` secret | 32 raw bytes, represented as 64 hex characters |
+| Runtime caller key | `RUN_API_KEY` secret | optional, but recommended for deployed workers |
+| Admin username/password | `ADMIN_USER`, `ADMIN_PASSWORD` secrets | protect the admin UI and `/auth/tokens/:piece` |
+| Admin cookie signing key | `ADMIN_SIGNING_KEY` secret | signs the `__fp_admin` session cookie |
+| Piece OAuth client credentials | piece-specific secrets | for example `GMAIL_CLIENT_ID` |
+| Direct per-request credentials | runtime headers | usually `X-Piece-Token` |
+| Stored provider OAuth tokens | encrypted KV values | keyed by piece name and user ID |
+| Slack webhook signing secret | `SLACK_SIGNING_SECRET` secret | verifies inbound Slack requests |
+
+The important design rule is simple:
+
+- **long-lived infrastructure secrets** live in Cloudflare secrets or bindings
+- **per-user OAuth tokens** live encrypted in KV
+- **per-request direct credentials** can arrive in runtime headers
+
+## Global secrets and bindings
+
+These are the global auth-related values used across the worker.
+
+### `FREEPIECES_PUBLIC_URL`
+
+This is the worker's public base URL.
+
+It is used to build:
+
+- `/auth/callback/:piece`
+- `/webhook/:piece`
+- values returned to callers such as subscription `webhookUrl`
+
+If this value is wrong, OAuth callbacks and webhook setup will point to the wrong place.
+
+### `TOKEN_STORE`
+
+This is the Cloudflare KV namespace binding.
+
+It is used for more than just tokens. In this repository it stores:
+
+- encrypted OAuth token records
+- webhook subscription records
+- admin piece-enabled flags
+- other admin/runtime state keyed into the same namespace
+
+### `TOKEN_ENCRYPTION_KEY`
+
+This is the most important secret in the OAuth flow.
+
+It does two jobs in the current implementation:
+
+1. encrypt stored OAuth token records with AES-GCM
+2. sign the OAuth `state` parameter with HMAC-SHA256
+
+Format requirements:
+
+- 64 hex characters
+- represents 32 raw bytes
+- generate with `openssl rand -hex 32`
+
+If the length is wrong, encryption and decryption will fail.
+
+### `RUN_API_KEY`
+
+This is the shared caller-auth secret for runtime endpoints.
+
+When it is configured, callers must send:
+
+```http
+Authorization: Bearer <RUN_API_KEY>
+```
+
+Repository convention: use an `fp_sk_...` prefix for this value.
+
+That prefix is a convention, not a separate protocol. The important part is that the caller sends the exact configured secret.
+
+### `ADMIN_USER` and `ADMIN_PASSWORD`
+
+These protect:
+
+- the admin login endpoint
+- the admin session flow
+- the token-seeding route `POST /auth/tokens/:piece`
+
+### `ADMIN_SIGNING_KEY`
+
+This key signs the admin session cookie.
+
+Like `TOKEN_ENCRYPTION_KEY`, it should be generated from strong random bytes.
+
+The code uses HMAC-SHA256 to sign session tokens.
+
+### `SLACK_SIGNING_SECRET`
+
+This is not general runtime auth.
+
+It is piece-specific inbound webhook verification for Slack. When configured, the worker verifies the HMAC signature on `POST /webhook/slack` requests before processing them.
+
+That is why inbound provider auth should be thought of as a separate layer from runtime caller auth.
+
+## Piece auth models
+
+Pieces do not all authenticate the same way.
+
+`freepieces` supports both native pieces and Activepieces-compatible pieces, and each model has its own auth vocabulary.
+
+### Native freepieces auth kinds
+
+Native pieces use one of these auth definitions:
+
+- `none`
+- `oauth2`
+- `apiKey`
+
+### AP-compatible auth kinds
+
+AP pieces may expose one or more auth modes, such as:
+
+- `OAUTH2`
+- `CUSTOM_AUTH`
+- `SECRET_TEXT`
+- `BASIC_AUTH`
+
+The worker adapts those into the context shape expected by the AP action or trigger.
+
+## How the worker resolves auth for each piece type
+
+This is the part that matters most when you debug real requests.
+
+### Native `oauth2`
+
+For native OAuth2 pieces such as Gmail, the worker tries to resolve auth in this order:
+
+1. look up a stored token in KV using `pieceName + userId`
+2. if found, refresh it when it is close to expiry and a refresh token exists
+3. if not found, fall back to a direct token from the request identity fields
+
+That means native OAuth2 pieces support both:
+
+- **stored OAuth user tokens**
+- **direct access-token fallback**
+
+The stored-token path is the normal production flow.
+
+### Native `apiKey`
+
+For native API-key pieces, the worker expects a direct credential.
+
+In secured mode, send it as:
+
+```http
+X-Piece-Token: <token>
+```
+
+### Native `none`
+
+No auth material is resolved.
+
+### AP `OAUTH2`
+
+For AP pieces with `OAUTH2`, the worker also prefers a stored KV token first.
+
+If the AP auth definition exposes a `tokenUrl`, the worker can refresh the stored token before use.
+
+If no stored token is found, the worker falls back to a direct token.
+
+Important limitation in the current repository:
+
+- the built-in browser OAuth routes `GET /auth/login/:piece` and `GET /auth/callback/:piece` currently support **native OAuth2 pieces only**
+- AP OAuth2 pieces can still use stored tokens, but those tokens are typically seeded through `POST /auth/tokens/:piece`
+
+Slack is the best example of this pattern in the current codebase.
+
+### AP `CUSTOM_AUTH`
+
+For AP pieces with `CUSTOM_AUTH`, the worker builds an auth object from secret-like properties.
+
+For example, if a piece expects a `botToken` prop, the worker can populate it from:
+
+- `X-Piece-Token`, or
+- an environment secret derived from the piece name, such as `SLACK_BOT_TOKEN`
+
+The worker prefers explicit runtime values when they are present.
+
+### AP `SECRET_TEXT`
+
+This is the simpler direct-secret case.
+
+The worker uses:
+
+- a runtime token when provided, or
+- an env secret like `${PIECE}_TOKEN`
+
+### AP `BASIC_AUTH`
+
+The worker reads a username and password from env secrets:
+
+- `${PIECE}_USERNAME`
+- `${PIECE}_PASSWORD`
+
+## How secret names are chosen
+
+Per-piece auth secret names depend on how the piece is defined.
+
+### Native OAuth2 pieces
+
+Native OAuth2 pieces declare their secret names explicitly in the piece definition:
+
+- `clientIdEnvKey`
+- `clientSecretEnvKey`
+
+That means the piece author chooses the exact env keys.
+
+### Direct `registerApPiece()` OAuth2 integrations
+
+When you register an AP piece directly, OAuth secret names are derived from the runtime piece name.
+
+For a piece named `slack`, the derived names are:
+
+- `SLACK_CLIENT_ID`
+- `SLACK_CLIENT_SECRET`
+
+For a piece named `my-piece`, the derived names become:
+
+- `MY_PIECE_CLIENT_ID`
+- `MY_PIECE_CLIENT_SECRET`
+
+### AP `CUSTOM_AUTH` properties
+
+For a `CUSTOM_AUTH` prop such as `botToken`, the worker derives a secret name like:
+
+```text
+SLACK_BOT_TOKEN
+```
+
+The conversion is:
+
+- piece name → upper snake case prefix
+- prop name → screaming snake case
+
+So `my-piece` + `apiKey` becomes:
+
+```text
+MY_PIECE_API_KEY
+```
+
+## Runtime caller auth
+
+Runtime caller auth applies to these routes:
+
+- `/run/:piece/:action`
+- `/trigger/:piece/:trigger`
+- `/subscriptions/:piece/:trigger`
+- `/subscriptions/:piece`
+- `/subscriptions/:piece/:trigger/:id`
+
+This is handled by `resolveRuntimeRequestAuth(...)`.
+
+### Secured mode: `RUN_API_KEY` is configured
+
+When `RUN_API_KEY` is set, runtime auth is split into two concerns:
+
+1. authenticate the caller
+2. pass provider credentials separately
+
+Use headers like this:
+
+```http
+Authorization: Bearer <RUN_API_KEY>
+X-User-Id: <userId>
+X-Piece-Token: <token>
+```
+
+Meaning:
+
+- `Authorization` proves the caller may use the worker
+- `X-User-Id` selects a stored OAuth token record from KV
+- `X-Piece-Token` carries a direct provider credential
+
+This is the most important rule in the whole auth system:
+
+> When `RUN_API_KEY` is enabled, the bearer token is **not** the Gmail token, Slack token, or API key. It is the shared worker access key.
+
+That is why deployed requests often need more than one auth header.
+
+### Local-dev mode: `RUN_API_KEY` is not configured
+
+When `RUN_API_KEY` is absent, the worker keeps a compatibility fallback:
+
+```http
+Authorization: Bearer <token-or-userId>
+```
+
+In this mode the bearer token is used as the fallback value for **both**:
+
+- `userId`
+- `pieceToken`
+
+You can still send `X-User-Id` and `X-Piece-Token` explicitly. If you do, those headers win over the bearer fallback.
+
+This is why simple local examples can work with just one bearer token.
+
+### Header matrix
+
+| Mode | `Authorization` value | `X-User-Id` | `X-Piece-Token` | Typical use |
+| --- | --- | --- | --- | --- |
+| deployed secured worker | `RUN_API_KEY` | optional but common | optional but common | production |
+| local dev without `RUN_API_KEY` | user ID or raw token fallback | optional override | optional override | fast local testing |
+
+### What `userId` actually is
+
+`userId` is not a magic field understood by Gmail or Slack.
+
+It is simply the lookup key used inside `TOKEN_STORE`.
+
+You can use any stable identifier, such as:
+
+- an email address
+- an internal user ID
+- a Slack user ID
+- a tenant-specific compound key like `team:ops@example.com`
+
+The worker stores and looks up the exact string. If the string changes, it will not find the old token.
+
+## OAuth2 browser flow
+
+This section describes the built-in browser OAuth flow for **native OAuth2 pieces**.
+
+### Step 1: user starts login
+
+The browser opens:
+
+```text
+GET /auth/login/:piece?userId=<your-user-id>
+```
+
+The worker:
+
+1. finds the piece in the registry
+2. confirms it is a native piece with `auth.type === 'oauth2'`
+3. builds the callback URL from `FREEPIECES_PUBLIC_URL`
+4. loads the piece-specific OAuth client credentials from env
+5. builds the provider authorization URL
+6. redirects the browser to the provider
+
+### Step 2: the worker creates a signed `state` parameter
+
+The login flow includes a `state` value containing:
+
+- `pieceName`
+- `userId`
+- `nonce`
+
+The payload is encoded and signed with HMAC-SHA256.
+
+If the callback arrives with a tampered or invalid state value, the worker rejects it.
+
+This is the CSRF protection for the OAuth flow.
+
+### Step 3: the provider redirects back
+
+The provider redirects the browser to:
+
+```text
+GET /auth/callback/:piece
+```
+
+The worker then:
+
+1. verifies the `state` signature
+2. exchanges the auth `code` for tokens at the provider's token endpoint
+3. builds an internal token record
+4. encrypts it
+5. stores it in KV under `token:<pieceName>:<userId>`
+
+### Token record shape
+
+Stored OAuth token records contain fields such as:
+
+- `accessToken`
+- `refreshToken`
+- `expiresAt`
+- `scope`
+- `tokenType`
+
+### Encryption details
+
+The token record is JSON-serialized and encrypted with AES-GCM before it is written to KV.
+
+The stored payload format is:
+
+```text
+<iv_base64url>:<ciphertext_base64url>
+```
+
+Each write uses a fresh random IV.
+
+### Token refresh behavior
+
+Before using a stored OAuth token, the worker checks whether it is close to expiry.
+
+Current behavior:
+
+- if there is no `expiresAt`, the record is treated as non-expiring
+- if the token is still comfortably valid, the existing record is used
+- if expiry is near and a refresh token exists, the worker calls the provider's refresh endpoint
+- if refresh fails, the worker logs the refresh failure and keeps the old record for the current attempt
+
+The refresh threshold in the current implementation is 15 minutes before expiry.
+
+### Gmail example
+
+The repository's Gmail example uses this flow:
+
+1. open `GET /auth/login/gmail?userId=<id>`
+2. complete Google consent in the browser
+3. worker stores the encrypted token in KV
+4. later calls to `/run/gmail/...` use `X-User-Id: <id>` to retrieve that token
+
+## Direct credential flow
+
+Not every integration needs stored OAuth tokens.
+
+Some pieces work best with a direct credential that the caller supplies at request time.
+
+### Common examples
+
+- Slack bot token
+- raw API key
+- plain access token passed directly by another trusted service
+
+### Secured worker example
+
+```http
+Authorization: Bearer <RUN_API_KEY>
+X-Piece-Token: <provider-token>
+```
+
+### Local example
+
+```http
+Authorization: Bearer <provider-token>
+```
+
+### Slack bot token example
+
+For Slack's `CUSTOM_AUTH` path, the worker can map a direct runtime token into the AP auth object the Slack piece expects.
+
+That is why this works in deployed mode:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/slack/send_channel_message" \
+	-H "Content-Type: application/json" \
+	-H "Authorization: Bearer $RUN_API_KEY" \
+	-H "X-Piece-Token: $SLACK_BOT_TOKEN" \
+	-d '{
+		"channel": "C0123456789",
+		"text": "Hello from freepieces",
+		"sendAsBot": true
+	}'
+```
+
+The caller does not have to build the AP auth object manually. The worker does that.
+
+## Token seeding flow
+
+There is one more OAuth path in this repository:
+
+```text
+POST /auth/tokens/:piece
+```
+
+This route lets an operator store an access token and optional refresh token directly into KV.
+
+### Why this route exists
+
+It is useful when:
+
+- the OAuth flow happened elsewhere
+- you already have an access token and refresh token pair
+- an AP piece supports OAuth2 token refresh but does not use the native browser login route
+- you want to load tokens into the worker without sending a user through the browser flow again
+
+### Route auth
+
+This route does **not** use `RUN_API_KEY`.
+
+Instead, it requires HTTP Basic auth using the admin credentials:
+
+```http
+Authorization: Basic base64(<ADMIN_USER>:<ADMIN_PASSWORD>)
+```
+
+### Request body
+
+```json
+{
+	"userId": "alice",
+	"accessToken": "token",
+	"refreshToken": "refresh-token",
+	"expiresIn": 43200
+}
+```
+
+Required fields:
+
+- `userId`
+- `accessToken`
+
+Optional fields:
+
+- `refreshToken`
+- `expiresIn`
+
+### When Slack uses this path
+
+The Slack example in this repository uses `--seed-tokens` for the OAuth2-with-token-rotation path.
+
+That works because the worker can later refresh a stored Slack token if the AP auth definition includes a `tokenUrl`.
+
+## Admin authentication
+
+Admin auth is separate from runtime auth.
+
+The admin panel is served from `/admin/`, and its API lives under `/admin/api/*`.
+
+### Login flow
+
+The browser sends:
+
+```text
+POST /admin/api/login
+```
+
+with a JSON body like:
+
+```json
+{
+	"username": "admin",
+	"password": "your-password"
+}
+```
+
+If the credentials match `ADMIN_USER` and `ADMIN_PASSWORD`, the worker returns a signed session cookie.
+
+### Session cookie details
+
+The admin session cookie is named:
+
+```text
+__fp_admin
+```
+
+Cookie properties in the current implementation:
+
+- `HttpOnly`
+- `SameSite=Strict`
+- `Path=/admin`
+- `Max-Age=86400`
+- `Secure` only when the request is over HTTPS
+
+The cookie payload is an HMAC-signed token containing:
+
+- `sub` — username
+- `exp` — absolute expiry timestamp
+
+The session TTL is 24 hours.
+
+### Protected admin routes
+
+After login, protected admin APIs require a valid signed cookie, including routes such as:
+
+- `GET /admin/api/me`
+- `GET /admin/api/pieces`
+- `GET /admin/api/pieces/:name/users`
+- `GET /admin/api/secrets`
+- `POST /admin/api/pieces/:name/install`
+- `DELETE /admin/api/pieces/:name`
+
+### Logout
+
+`POST /admin/api/logout` clears the cookie by setting the same cookie name with `Max-Age=0`.
+
+## Inbound webhook authenticity
+
+Webhook routes are different from runtime routes.
+
+For example, Slack cannot send your `RUN_API_KEY` when it calls your worker. So `POST /webhook/slack` cannot use the normal runtime caller-auth contract.
+
+Instead, the worker verifies authenticity using the provider's signing mechanism.
+
+### Slack flow
+
+When `SLACK_SIGNING_SECRET` is configured, the worker:
+
+1. reads the raw request body
+2. reads `x-slack-request-timestamp`
+3. reads `x-slack-signature`
+4. rejects stale requests older than 5 minutes
+5. computes the expected HMAC-SHA256 signature
+6. compares it with a timing-safe comparison
+
+If the signature is invalid, the worker returns `401`.
+
+That protects the inbound webhook path without requiring the caller to know `RUN_API_KEY`.
+
+## End-to-end scenarios
+
+These examples are the easiest way to decide which auth path you want.
+
+### Scenario 1: deployed Gmail with stored OAuth tokens
+
+Use this when:
+
+- the piece is native OAuth2
+- you want a browser-based user consent flow
+- you want automatic token refresh
+
+Flow:
+
+1. configure `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET`
+2. configure `TOKEN_ENCRYPTION_KEY`, `TOKEN_STORE`, and `FREEPIECES_PUBLIC_URL`
+3. open `/auth/login/gmail?userId=<id>`
+4. complete OAuth consent
+5. call runtime endpoints with:
+	 - `Authorization: Bearer <RUN_API_KEY>`
+	 - `X-User-Id: <id>`
+
+### Scenario 2: deployed Slack with a bot token
+
+Use this when:
+
+- you have a direct Slack bot token
+- you do not want to store per-user OAuth tokens for this workflow
+
+Flow:
+
+1. configure `RUN_API_KEY`
+2. send `Authorization: Bearer <RUN_API_KEY>`
+3. send `X-Piece-Token: <xoxb-...>`
+4. call `/run/slack/...` or `/subscriptions/slack/...`
+
+### Scenario 3: AP OAuth2 piece with seeded tokens
+
+Use this when:
+
+- the piece is AP-based
+- you already obtained an access token and refresh token elsewhere
+- you want the worker to refresh and reuse that token
+
+Flow:
+
+1. configure the piece's derived client ID and client secret env vars
+2. seed the token using `POST /auth/tokens/:piece`
+3. later call runtime routes with `X-User-Id: <id>`
+
+### Scenario 4: local dev without `RUN_API_KEY`
+
+Use this when:
+
+- you are testing locally with `wrangler dev`
+- you want the simplest possible request contract
+
+Flow:
+
+1. leave `RUN_API_KEY` unset
+2. send `Authorization: Bearer <fallback>`
+3. optionally add `X-User-Id` and `X-Piece-Token` if you want explicit behavior
+
+This mode is convenient, but it is not the best mental model for deployed systems. In production, always think in terms of **caller auth** plus **provider auth** as separate fields.
+
+## Security design notes
+
+Here are the most important security choices in the current implementation.
+
+### 1. Caller auth is separate from provider auth
+
+This reduces confusion and prevents one secret from doing every job.
+
+`RUN_API_KEY` is not reused as a Gmail token, and a Gmail token is not used as the worker's caller-auth key.
+
+### 2. Stored OAuth tokens are encrypted before KV storage
+
+KV is used for persistence, but the token payload is encrypted before write.
+
+### 3. OAuth state is signed
+
+The browser callback verifies the `state` parameter so the worker can reject tampered callback attempts.
+
+### 4. Credential comparisons use timing-safe logic
+
+The code uses `timingSafeEqual(...)` when comparing:
+
+- runtime bearer key vs `RUN_API_KEY`
+- admin username and password
+- Slack signature-derived values
+
+### 5. Admin cookies are narrow in scope
+
+The admin session cookie is:
+
+- `HttpOnly`
+- `SameSite=Strict`
+- path-scoped to `/admin`
+
+### 6. Webhook callback URLs must be HTTPS
+
+Subscription callback URLs are validated as HTTPS-only.
+
+That is both an auth and security boundary, because it reduces the chance of accidental insecure delivery or trivial misuse.
+
+### 7. Error responses are intentionally generic
+
+For example, when an action fails, callers get:
+
+```json
+{
+	"ok": false,
+	"error": "Action execution failed"
+}
+```
+
+The real exception is logged server-side instead of being leaked to the caller.
+
+## Common mistakes
+
+### Sending the Gmail token as the bearer token on a secured worker
+
+When `RUN_API_KEY` is enabled, the bearer token must be the shared runtime key.
+
+Use `X-User-Id` or `X-Piece-Token` for piece credentials.
+
+### Using a different `userId` during runtime than during OAuth login
+
+The stored KV key is exact.
+
+If you authorize with `alice@example.com` and later call runtime routes with `alice`, the worker will not find the stored token.
+
+### Expecting `/auth/login/:piece` to work for every OAuth2 piece
+
+In the current repository, the browser OAuth flow supports native OAuth2 pieces only.
+
+AP OAuth2 pieces usually use the token-seeding route instead.
+
+### Forgetting `TOKEN_ENCRYPTION_KEY`
+
+Without it, OAuth state verification and token encryption break.
+
+### Using an invalid `TOKEN_ENCRYPTION_KEY` format
+
+It must represent 32 raw bytes. In practice that means 64 hex characters.
+
+### Forgetting admin secrets in local or deployed environments
+
+Without `ADMIN_USER`, `ADMIN_PASSWORD`, and `ADMIN_SIGNING_KEY`:
+
+- the admin panel cannot log in
+- the token-seeding route cannot authenticate
+
+### Assuming webhook routes use `RUN_API_KEY`
+
+Providers like Slack do not call webhook routes with your worker's shared runtime key.
+
+Webhook authenticity is a separate validation layer.
+
+## Troubleshooting checklist
+
+### `401 Unauthorized` on `/run`, `/trigger`, or `/subscriptions`
+
+Check:
+
+- is `RUN_API_KEY` configured on the worker?
+- are you sending the exact same value in `Authorization: Bearer ...`?
+- if you are in local dev, did you maybe enable `RUN_API_KEY` without updating your requests?
+
+### `Missing OAuth client credentials: ...`
+
+Check the exact env keys required by the piece.
+
+For native OAuth pieces, those keys come from the piece definition.
+
+For directly registered AP OAuth pieces, they are derived from the piece name.
+
+### Gmail runtime calls fail even though OAuth succeeded once
+
+Check:
+
+- the `userId` matches exactly
+- `TOKEN_STORE` points to the right KV namespace
+- `TOKEN_ENCRYPTION_KEY` has not changed since the token was stored
+- `FREEPIECES_PUBLIC_URL` matches the deployed worker URL used during OAuth setup
+
+### Slack webhook says `Invalid signature`
+
+Check:
+
+- `SLACK_SIGNING_SECRET` matches the app's current signing secret
+- the request body reaches the worker unchanged
+- the request timestamp is fresh
+
+### Admin login always fails
+
+Check:
+
+- `ADMIN_USER`
+- `ADMIN_PASSWORD`
+- `ADMIN_SIGNING_KEY`
+
+Also make sure you are posting JSON to `/admin/api/login`, not trying to use Basic auth there.
+
+### `/auth/tokens/:piece` returns `Unauthorized`
+
+Check that you are using HTTP Basic auth with the admin credentials, not `RUN_API_KEY`.
+
+## Quick reference
+
+### Runtime headers in deployed mode
+
+```http
+Authorization: Bearer <RUN_API_KEY>
+X-User-Id: <userId>
+X-Piece-Token: <token>
+```
+
+### Runtime headers in local-dev mode
+
+```http
+Authorization: Bearer <userId-or-pieceToken>
+```
+
+Optional explicit overrides:
+
+```http
+X-User-Id: <userId>
+X-Piece-Token: <token>
+```
+
+### Admin login request
+
+```text
+POST /admin/api/login
+```
+
+```json
+{
+	"username": "admin",
+	"password": "your-password"
+}
+```
+
+### Token seeding request
+
+```text
+POST /auth/tokens/:piece
+Authorization: Basic base64(<ADMIN_USER>:<ADMIN_PASSWORD>)
+```
+
+```json
+{
+	"userId": "alice",
+	"accessToken": "token",
+	"refreshToken": "refresh-token",
+	"expiresIn": 43200
+}
+```
+
+### Common auth-related env keys
+
+| Key | Purpose |
+| --- | --- |
+| `FREEPIECES_PUBLIC_URL` | base public URL for callbacks and webhooks |
+| `TOKEN_STORE` | KV binding for tokens and state |
+| `TOKEN_ENCRYPTION_KEY` | AES-GCM key and OAuth state signing key |
+| `RUN_API_KEY` | shared caller-auth secret for runtime routes |
+| `ADMIN_USER` | admin username |
+| `ADMIN_PASSWORD` | admin password |
+| `ADMIN_SIGNING_KEY` | session-cookie signing key |
+| `<PIECE>_CLIENT_ID` | OAuth client ID for an AP OAuth piece |
+| `<PIECE>_CLIENT_SECRET` | OAuth client secret for an AP OAuth piece |
+| `<PIECE>_<PROP>` | derived secret for AP `CUSTOM_AUTH` props |
+
+## Source files
+
+If you want to trace the auth behavior in code, start here:
+
+- `src/worker.ts` — route-level auth, admin routes, token seeding, subscriptions, webhook verification
+- `src/lib/request-auth.ts` — runtime header parsing and secured-vs-local behavior
+- `src/lib/oauth.ts` — login URL building, signed state, token exchange, refresh logic
+- `src/lib/token-store.ts` — encrypted KV token persistence
+- `src/lib/crypto.ts` — AES-GCM helpers
+- `src/lib/admin-session.ts` — signed admin session cookie
+- `src/framework/types.ts` — native auth types and env contract
+- `src/framework/registry.ts` — derived secret names for AP auth modes
+- `examples/gmail-example.ts` — native OAuth2 example
+- `examples/slack-example.ts` — direct token and seeded-token examples
+- `examples/sdk-example.ts` — SDK header behavior
