@@ -25,7 +25,7 @@
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "vite",
+    "dev": "bash scripts/dev.sh",
     "dev:admin": "vite --config vite.config.admin.ts",
     "build": "tsc --noEmit && vite build && pnpm run build:admin && pnpm run build:cli && pnpm run build:sdk",
     "build:sdk": "tsc --project tsconfig.sdk.json",

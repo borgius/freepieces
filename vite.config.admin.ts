@@ -17,6 +17,10 @@ export default defineConfig({
     fs: {
       allow: [resolve(__dirname)],
     },
+    proxy: {
+      '/admin/api': 'http://127.0.0.1:8787',
+      '/auth': 'http://127.0.0.1:8787',
+    },
   },
   build: {
     outDir: resolve(__dirname, 'dist/public/admin'),

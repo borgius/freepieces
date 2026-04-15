@@ -17,22 +17,31 @@ export interface DocsMdxComponentOptions {
   onNavigateDoc: (slug: string, hash?: string) => void;
 }
 
-function textFromChildren(children: ReactNode): string {
-  return Children.toArray(children)
+function textFromChildren(
+  children: ReactNode,
+  options?: { preserveWhitespace?: boolean },
+): string {
+  const preserveWhitespace = options?.preserveWhitespace ?? false;
+
+  const text = Children.toArray(children)
     .map((child) => {
       if (typeof child === 'string' || typeof child === 'number') {
         return String(child);
       }
 
       if (isValidElement<{ children?: ReactNode }>(child)) {
-        return textFromChildren(child.props.children);
+        return textFromChildren(child.props.children, options);
       }
 
       return '';
     })
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .join(preserveWhitespace ? '' : ' ');
+
+  if (preserveWhitespace) {
+    return text;
+  }
+
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function slugify(value: string): string {
@@ -84,8 +93,8 @@ function DocHeading({ as, size, mt, children }: HeadingProps) {
 }
 
 function DocCode({ className, children, ...props }: ComponentPropsWithoutRef<'code'>) {
-  const text = textFromChildren(children);
-  const isBlock = Boolean(className?.includes('language-')) || text.includes('\n');
+  const rawText = textFromChildren(children, { preserveWhitespace: true });
+  const isBlock = Boolean(className?.includes('language-')) || rawText.includes('\n');
 
   if (isBlock) {
     return (
@@ -100,7 +109,7 @@ function DocCode({ className, children, ...props }: ComponentPropsWithoutRef<'co
         whiteSpace="pre"
         {...props}
       >
-        {text.replace(/\n$/, '')}
+        {rawText.replace(/\n$/, '')}
       </Box>
     );
   }
