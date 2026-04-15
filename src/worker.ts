@@ -1,332 +1,31 @@
-/**
- * Cloudflare Workers entrypoint for freepieces.
- *
- * Routes
- * ──────
- *   GET  /health                             → health check
- *   GET  /pieces                             → list registered pieces
- *   GET  /auth/login/:piece?userId=          → start OAuth2 flow
- *   GET  /auth/callback/:piece               → OAuth2 callback (code exchange + KV store)
- *   POST /auth/tokens/:piece                 → seed access+refresh tokens directly into KV (admin auth)
- *   POST /run/:piece/:action                 → execute an action
- *   POST /trigger/:piece/:trigger            → run trigger filter (receive webhook payload)
- *
- *   POST /webhook/:piece                      → global inbound webhook (Slack Events API Request URL)
- *   POST /subscriptions/:piece/:trigger        → register a webhook subscription (Bearer auth)
- *   GET  /subscriptions/:piece                 → list subscriptions for a piece (Bearer auth)
- *   DELETE /subscriptions/:piece/:trigger/:id  → remove a subscription (Bearer auth)
- *
- *   GET  /admin                              → admin SPA (served from ASSETS binding)
- *   POST /admin/api/login                    → issue admin session cookie
- *   POST /admin/api/logout                   → clear admin session cookie
- *   GET  /admin/api/me                       → current session info
- *   GET  /admin/api/pieces                   → list pieces + install status
- *   GET  /admin/api/pieces/:name/users       → list stored OAuth users for a piece
- *   POST /admin/api/pieces/:name/install     → enable a piece
- *   DELETE /admin/api/pieces/:name           → disable a piece
- *   GET  /admin/api/secrets                  → global + per-piece secrets with set/missing status
- *
- * Security model
- * ──────────────
- *   • Per-piece OAuth client secrets         → Cloudflare Secrets (for example GMAIL_CLIENT_ID)
- *   • TOKEN_ENCRYPTION_KEY                   → Cloudflare Secret (32 bytes hex)
- *   • Per-user tokens                        → encrypted in KV (TOKEN_STORE)
- *   • RUN_API_KEY                            → shared caller-auth key for runtime endpoints
- *   • OAuth2 lookup key                      → sent via X-User-Id when RUN_API_KEY is enabled
- *   • Direct piece credential                → sent via X-Piece-Token when RUN_API_KEY is enabled
- *   • ADMIN_USER / ADMIN_PASSWORD            → Cloudflare Secrets (or .env for local dev)
- *   • ADMIN_SIGNING_KEY                      → Cloudflare Secret (32 bytes hex)
- *   • Admin sessions                         → HMAC-signed cookie (__fp_admin)
- */
+/** Cloudflare Workers entrypoint for freepieces. */
 
 import { listPieces, getPiece, getTrigger } from './framework/registry';
 import { buildCallbackUrl } from './framework/auth';
 import {
   buildLoginUrl,
   handleCallback,
-  refreshTokenIfNeeded,
   resolveOAuthClientCredentials,
 } from './lib/oauth';
-import { getToken, listStoredUserIds, storeToken } from './lib/token-store';
-import {
-  createSessionToken,
-  verifySessionToken,
-  timingSafeEqual,
-  parseCookie,
-  COOKIE_NAME
-} from './lib/admin-session';
+import { storeToken } from './lib/token-store';
+import { createSessionToken, timingSafeEqual } from './lib/admin-session';
 import { resolveRuntimeRequestAuth } from './lib/request-auth';
+import { buildApContext, buildApTriggerContext } from './lib/ap-context';
+import { resolveNativeRuntimeAuth, resolveApRuntimeAuth } from './lib/auth-resolve';
+import {
+  dispatchWebhook,
+  listSubscriptions,
+  verifySlackSignature,
+  resolveQueueBinding,
+  sameSubscriptionOwner,
+  SUB_KEY,
+} from './lib/webhook';
+import type { WebhookSubscription } from './lib/webhook';
+import { requireAdminSession, buildCookie } from './lib/admin-config';
+import { handleAdminApi } from './routes/admin-api';
 import './pieces/index.js';
-import type { Env, OAuth2AuthDefinition, ApPiece, PieceTriggerContext } from './framework/types';
+import type { Env, OAuth2AuthDefinition, PieceTriggerContext } from './framework/types';
 
-// ---------------------------------------------------------------------------
-// Activepieces context builder
-// ---------------------------------------------------------------------------
-
-/**
- * Build the execution context expected by @activepieces/pieces-framework
- * action.run() from the freepieces request data.
- *
- * Auth mapping by AP auth type:
- *   SECRET_TEXT  → the raw token string
- *   CUSTOM_AUTH  → object keyed by prop names, filled from env secrets
- *                  (env key = PIECENAME_PROPNAME, e.g. SLACK_BOT_TOKEN)
- *   OAUTH2       → { access_token, ... } from bearer / KV
- *   BASIC_AUTH   → { username, password } from env (PIECENAME_USERNAME, _PASSWORD)
- */
-function buildApContext(
-  pieceName: string,
-  piece: ApPiece,
-  auth: Record<string, string> | undefined,
-  props: Record<string, unknown>,
-  env: Env,
-): unknown {
-  const envRecord = env as Record<string, string>;
-  const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
-
-  // Determine which auth type to use.  When auth is an array (multiple options),
-  // prefer CUSTOM_AUTH when reading from env secrets (no bearer token present),
-  // and prefer OAUTH2 when a bearer/access token has been passed in directly.
-  const authDefs: Array<{ type: string; props?: Record<string, unknown> }> =
-    Array.isArray(piece.auth) ? piece.auth : piece.auth ? [piece.auth] : [];
-
-  // When the caller provides a token (via Bearer or KV lookup), OAUTH2 is the
-  // natural fit.  When there is no runtime token, env-based CUSTOM_AUTH props
-  // (e.g. SLACK_BOT_TOKEN) should take priority over an empty OAUTH2 slot.
-  const hasToken = !!(auth?.accessToken || auth?.token);
-  const sortedAuthDefs = hasToken
-    ? authDefs // OAUTH2 wins if it comes first in the piece's auth array
-    : [...authDefs].sort((a, b) => {
-        if (a.type === 'CUSTOM_AUTH') return -1;
-        if (b.type === 'CUSTOM_AUTH') return 1;
-        return 0;
-      });
-
-  let apAuth: unknown = auth?.token ?? '';
-
-  for (const authDef of sortedAuthDefs) {
-    if (authDef.type === 'CUSTOM_AUTH') {
-      // Build the auth object from env secrets, with optional request-time override.
-      // camelCase prop names are converted to SCREAMING_SNAKE_CASE for env lookup
-      // e.g. botToken → SLACK_BOT_TOKEN, apiKey → SLACK_API_KEY
-      const propKeys = Object.keys(authDef.props ?? {});
-      const authProps: Record<string, string> = {};
-      for (const key of propKeys) {
-        const envKey = `${envPrefix}_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
-        authProps[key] =
-          auth?.[key] ??
-          envRecord[envKey] ??
-          '';
-      }
-      // If a Bearer token was supplied and the first prop is the primary token
-      // (e.g. botToken), map it in directly so callers only need SLACK_BOT_TOKEN.
-      if (auth?.token && propKeys.length > 0) {
-        authProps[propKeys[0]] = auth.token;
-      }
-      apAuth = { type: 'CUSTOM_AUTH', props: authProps };
-      break;
-    }
-    if (authDef.type === 'SECRET_TEXT') {
-      apAuth = auth?.token ?? envRecord[`${envPrefix}_TOKEN`] ?? '';
-      break;
-    }
-    if (authDef.type === 'OAUTH2') {
-      const accessToken = auth?.accessToken ?? auth?.token ?? '';
-      apAuth = {
-        type: 'OAUTH2',
-        access_token: accessToken,
-        token_type: 'Bearer',
-        // Populate authed_user so pieces that call requireUserToken() also work.
-        // When the caller only has a user token, it serves as both bot and user token.
-        data: {
-          authed_user: {
-            access_token: auth?.userToken ?? accessToken,
-          },
-        },
-      };
-      break;
-    }
-    if (authDef.type === 'BASIC_AUTH') {
-      apAuth = {
-        username: envRecord[`${envPrefix}_USERNAME`] ?? '',
-        password: envRecord[`${envPrefix}_PASSWORD`] ?? '',
-      };
-      break;
-    }
-  }
-
-  return {
-    auth: apAuth,
-    propsValue: props,
-    store: {
-      get: async () => null,
-      put: async () => undefined,
-      delete: async () => undefined,
-    },
-    files: {
-      write: async () => '',
-    },
-    server: {
-      apiUrl: env.FREEPIECES_PUBLIC_URL ?? '',
-      publicUrl: env.FREEPIECES_PUBLIC_URL ?? '',
-      token: '',
-    },
-    connections: { get: async () => null },
-    project: { id: 'freepieces', externalId: async () => undefined },
-    flows: {
-      list: async () => ({ data: [], next: null, previous: null }),
-      current: { id: 'fp-flow', version: { id: 'fp-flow-version' } },
-    },
-    step: { name: 'fp-step' },
-    tags: { add: async () => undefined },
-    output: { update: async () => undefined },
-    agent: { tools: async () => ({}) },
-    executionType: 'BEGIN',
-    run: {
-      id: 'fp-run',
-      stop: () => undefined,
-      respond: () => undefined,
-      pause: () => undefined,
-      createWaitpoint: async () => ({
-        id: '',
-        resumeUrl: '',
-        buildResumeUrl: () => '',
-      }),
-      waitForWaitpoint: () => undefined,
-    },
-    variables: {},
-    /** @deprecated — kept for older AP actions that still read generateResumeUrl */
-    generateResumeUrl: () => '',
-  };
-}
-
-async function resolveNativeRuntimeAuth(
-  pieceName: string,
-  authDef: { type: string },
-  env: Env,
-  userId?: string,
-  pieceToken?: string,
-): Promise<Record<string, string> | undefined> {
-  if (authDef.type === 'oauth2') {
-    const lookupKey = userId;
-    const directToken = pieceToken ?? lookupKey;
-    const storedRecord = lookupKey && env.TOKEN_STORE
-      ? await getToken(env.TOKEN_STORE, pieceName, lookupKey, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
-          console.error('[freepieces] Failed to retrieve token from KV:', err);
-          return null;
-        })
-      : null;
-
-    if (storedRecord) {
-      const lookupUserId = lookupKey;
-      if (!lookupUserId) return undefined;
-      const liveRecord = await refreshTokenIfNeeded(
-        storedRecord,
-        authDef as OAuth2AuthDefinition,
-        env,
-        pieceName,
-        lookupUserId,
-      ).catch((err) => {
-        console.error('[freepieces] Token refresh error:', err);
-        return storedRecord;
-      });
-      return {
-        accessToken: liveRecord.accessToken,
-        ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
-        ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
-      };
-    }
-
-    return directToken
-      ? { token: directToken, accessToken: directToken }
-      : undefined;
-  }
-
-  return pieceToken ? { token: pieceToken } : undefined;
-}
-
-async function resolveApRuntimeAuth(
-  pieceName: string,
-  piece: ApPiece,
-  env: Env,
-  userId?: string,
-  pieceToken?: string,
-): Promise<Record<string, string> | undefined> {
-  const storedRecord = userId && env.TOKEN_STORE
-    ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
-        console.error('[freepieces] KV lookup failed for AP piece:', err);
-        return null;
-      })
-    : null;
-
-  if (storedRecord) {
-    const authDefs = Array.isArray(piece.auth) ? piece.auth : piece.auth ? [piece.auth] : [];
-    const apOAuth2 = authDefs.find((a) => a.type === 'OAUTH2');
-    let liveRecord = storedRecord;
-    if (apOAuth2?.tokenUrl) {
-      const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
-      const oauth2Def: OAuth2AuthDefinition = {
-        type: 'oauth2',
-        authorizationUrl: apOAuth2.authUrl ?? '',
-        tokenUrl: apOAuth2.tokenUrl,
-        scopes: apOAuth2.scope ?? [],
-        clientIdEnvKey: `${envPrefix}_CLIENT_ID`,
-        clientSecretEnvKey: `${envPrefix}_CLIENT_SECRET`,
-      };
-      const lookupUserId = userId;
-      if (!lookupUserId) return undefined;
-      liveRecord = await refreshTokenIfNeeded(
-        storedRecord,
-        oauth2Def,
-        env,
-        pieceName,
-        lookupUserId,
-      ).catch((err) => {
-        console.error('[freepieces] AP piece token refresh error:', err);
-        return storedRecord;
-      });
-    }
-    return {
-      accessToken: liveRecord.accessToken,
-      token: liveRecord.accessToken,
-      ...(liveRecord.refreshToken ? { refreshToken: liveRecord.refreshToken } : {}),
-      ...(liveRecord.scope ? { scope: liveRecord.scope } : {}),
-    };
-  }
-
-  const directToken = pieceToken ?? userId;
-  return directToken ? { token: directToken } : undefined;
-}
-
-/**
- * Build the execution context for an AP trigger's run() call.
- * Mirrors buildApContext and adds the `payload` and `app` fields expected
- * by APP_WEBHOOK, WEBHOOK, and POLLING triggers.
- *
- * @param payload - The raw incoming webhook body (already parsed from JSON).
- */
-function buildApTriggerContext(
-  pieceName: string,
-  piece: ApPiece,
-  auth: Record<string, string> | undefined,
-  propsValue: Record<string, unknown>,
-  payload: unknown,
-  env: Env,
-): unknown {
-  const base = buildApContext(pieceName, piece, auth, propsValue, env) as Record<string, unknown>;
-  return {
-    ...base,
-    payload: {
-      body: payload,
-      headers: {},
-      method: 'POST',
-    },
-    app: {
-      /** No-op: freepieces doesn't manage webhook registration lifecycle. */
-      createListeners: () => undefined,
-    },
-  };
-}
 function json(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data, null, 2), {
     ...init,
@@ -337,297 +36,6 @@ function json(data: unknown, init: ResponseInit = {}): Response {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Admin helpers
-// ---------------------------------------------------------------------------
-
-/** KV key prefix for admin piece-enabled flags. */
-const PIECE_FLAG = (name: string) => `__admin:enabled:${name}`;
-
-/**
- * Global infrastructure secrets shown in the Settings › Secrets panel.
- * These keys are filtered OUT of per-piece secret groups in the pieces API.
- */
-const GLOBAL_SECRET_DEFS = [
-  {
-    key: 'FREEPIECES_PUBLIC_URL',
-    displayName: 'Public URL',
-    description: 'Base URL for OAuth callbacks and webhook routes. Set as a [vars] entry in wrangler.toml.',
-    required: true,
-    command: 'Set FREEPIECES_PUBLIC_URL in wrangler.toml [vars]',
-  },
-  {
-    key: 'TOKEN_STORE',
-    displayName: 'Token Store (KV Namespace)',
-    description: 'KV namespace binding for storing OAuth tokens and admin state.',
-    required: true,
-    command: 'Configure [[kv_namespaces]] in wrangler.toml',
-  },
-  {
-    key: 'TOKEN_ENCRYPTION_KEY',
-    displayName: 'Token Encryption Key',
-    description: 'AES-GCM 32-byte key for encrypting stored OAuth tokens. Generate: openssl rand -hex 32',
-    required: true,
-    command: 'wrangler secret put TOKEN_ENCRYPTION_KEY',
-  },
-  {
-    key: 'ADMIN_USER',
-    displayName: 'Admin Username',
-    description: 'Username for the admin panel.',
-    required: true,
-    command: 'wrangler secret put ADMIN_USER',
-  },
-  {
-    key: 'ADMIN_PASSWORD',
-    displayName: 'Admin Password',
-    description: 'Password for the admin panel.',
-    required: true,
-    command: 'wrangler secret put ADMIN_PASSWORD',
-  },
-  {
-    key: 'ADMIN_SIGNING_KEY',
-    displayName: 'Admin Session Signing Key',
-    description: 'HMAC key for signing admin session tokens. Generate: openssl rand -hex 32',
-    required: true,
-    command: 'wrangler secret put ADMIN_SIGNING_KEY',
-  },
-  {
-    key: 'RUN_API_KEY',
-    displayName: 'Runtime API Key',
-    description: 'Shared caller-auth key for /run, /trigger, and /subscriptions. Prefix with fp_sk_. (echo "fp_sk_$(openssl rand -hex 32)")',
-    required: false,
-    command: 'wrangler secret put RUN_API_KEY',
-  },
-] as const;
-
-/** Keys that belong to global config — filtered out of per-piece secret groups. */
-const GLOBAL_SECRET_KEY_SET = new Set<string>(GLOBAL_SECRET_DEFS.map((d) => d.key));
-
-/**
- * Extra secret groups that are not derivable from AP auth definitions but are
- * needed for specific pieces (e.g. webhook signature verification).
- * Keyed by piece name.
- */
-const PIECE_EXTRA_SECRET_GROUPS: Record<string, Array<{ authType: string; displayName: string; secrets: Array<{ key: string; displayName: string; description: string; required: boolean; command: string }> }>> = {
-  slack: [
-    {
-      authType: 'WEBHOOK_SECURITY',
-      displayName: 'Webhook Security',
-      secrets: [
-        {
-          key: 'SLACK_SIGNING_SECRET',
-          displayName: 'Slack Signing Secret',
-          description: 'Used to verify incoming Slack Event API webhook request signatures. Found in Slack app → Basic Information → Signing Secret.',
-          required: false,
-          command: 'wrangler secret put SLACK_SIGNING_SECRET',
-        },
-      ],
-    },
-  ],
-};
-
-// ---------------------------------------------------------------------------
-// Webhook subscription helpers
-// ---------------------------------------------------------------------------
-
-/** KV key for a single subscription record. */
-const SUB_KEY = (piece: string, id: string) => `sub:${piece}:${id}`;
-/** KV list prefix for all subscriptions of a piece. */
-const SUB_PREFIX = (piece: string) => `sub:${piece}:`;
-
-interface WebhookSubscription {
-  id: string;
-  trigger: string;
-  propsValue: Record<string, unknown>;
-  /** URL to POST matched events to. Must be HTTPS. Mutually exclusive with `queueName`. */
-  callbackUrl?: string;
-  /**
-   * Cloudflare Queue name to deliver matched events to instead of an HTTP callback.
-   * The queue producer binding must exist in wrangler.toml as `QUEUE_<UPPER_SNAKE>`.
-   * For example, `queueName: "slack-new-message"` resolves to env binding `QUEUE_SLACK_NEW_MESSAGE`.
-   * Mutually exclusive with `callbackUrl`.
-   */
-  queueName?: string;
-  /** @deprecated Legacy single-field runtime auth from older subscription records. */
-  bearerToken?: string;
-  /** OAuth2 KV lookup key, when the trigger runs under a stored user token. */
-  userId?: string;
-  /** Direct runtime credential for API-key / CUSTOM_AUTH trigger execution. */
-  pieceToken?: string;
-  /** Per-subscription CUSTOM_AUTH prop overrides, captured from X-Piece-Auth at subscribe time. */
-  pieceAuthProps?: Record<string, string>;
-  createdAt: string;
-}
-
-function sameSubscriptionOwner(
-  sub: Pick<WebhookSubscription, 'userId' | 'pieceToken'>,
-  owner: { userId?: string; pieceToken?: string },
-): boolean {
-  const legacy = (sub as WebhookSubscription).bearerToken;
-  const subUserId = sub.userId ?? legacy;
-  const subPieceToken = sub.pieceToken ?? legacy;
-  return subUserId === owner.userId && subPieceToken === owner.pieceToken;
-}
-
-/**
- * Verify a Slack (or compatible) HMAC-SHA256 request signature.
- * Rejects requests older than 5 minutes to prevent replay attacks.
- */
-async function verifySlackSignature(
-  signingSecret: string,
-  rawBody: string,
-  timestamp: string,
-  signature: string,
-): Promise<boolean> {
-  // Reject stale requests
-  const ts = parseInt(timestamp, 10);
-  if (isNaN(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
-
-  const baseStr = `v0:${timestamp}:${rawBody}`;
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(signingSecret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(baseStr));
-  const computed = 'v0=' + Array.from(new Uint8Array(mac))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return timingSafeEqual(computed, signature);
-}
-
-/** Load all subscriptions for a piece from KV. */
-async function listSubscriptions(kv: KVNamespace, piece: string): Promise<WebhookSubscription[]> {
-  const { keys } = await kv.list({ prefix: SUB_PREFIX(piece) });
-  const subs: WebhookSubscription[] = [];
-  for (const key of keys) {
-    const raw = await kv.get(key.name);
-    if (raw) {
-      try { subs.push(JSON.parse(raw) as WebhookSubscription); } catch { /* skip corrupt */ }
-    }
-  }
-  return subs;
-}
-
-/**
- * Resolve a Cloudflare Queue producer binding from the environment.
- * Convention: `queueName` "slack-new-message" → env binding "QUEUE_SLACK_NEW_MESSAGE".
- */
-function resolveQueueBinding(env: Env, queueName: string): Queue | undefined {
-  const bindingName = 'QUEUE_' + queueName.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
-  return env[bindingName] as Queue | undefined;
-}
-
-/**
- * Fan-out an inbound webhook payload to all active subscriptions for a piece.
- * For each subscription, runs the trigger's run() filter and delivers matched
- * events to the subscription's callbackUrl or Cloudflare Queue.  Best-effort:
- * individual delivery failures are logged but do not affect other subscriptions.
- */
-async function dispatchWebhook(
-  pieceName: string,
-  piece: ApPiece,
-  payload: unknown,
-  env: Env,
-): Promise<void> {
-  const subs = await listSubscriptions(env.TOKEN_STORE, pieceName);
-  await Promise.allSettled(
-    subs.map(async (sub) => {
-      const triggerDef = getTrigger(pieceName, sub.trigger);
-      if (!triggerDef) return;
-
-      let auth = await resolveApRuntimeAuth(
-        pieceName,
-        piece,
-        env,
-        sub.userId ?? sub.bearerToken,
-        sub.pieceToken ?? sub.bearerToken,
-      );
-      if (sub.pieceAuthProps) auth = { ...auth, ...sub.pieceAuthProps };
-
-      let events: unknown[];
-      try {
-        const trigCtx = buildApTriggerContext(pieceName, piece, auth, sub.propsValue, payload, env);
-        events = await (triggerDef as { run(ctx: unknown): Promise<unknown[]> }).run(trigCtx);
-      } catch {
-        return; // trigger filter threw — skip
-      }
-
-      if (events.length === 0) return;
-
-      const eventPayload = { piece: pieceName, trigger: sub.trigger, events };
-
-      // Deliver to Cloudflare Queue when queueName is set
-      if (sub.queueName) {
-        const queue = resolveQueueBinding(env, sub.queueName);
-        if (!queue) {
-          console.error(`[freepieces] Queue binding not found for "${sub.queueName}". Add [[queues.producers]] to wrangler.toml.`);
-          return;
-        }
-        await queue.send(eventPayload).catch((err: unknown) => {
-          console.error(`[freepieces] Queue delivery to "${sub.queueName}" failed:`, err);
-        });
-        return;
-      }
-
-      // POST matched events to the subscriber's callback URL (best-effort)
-      if (sub.callbackUrl) {
-        await fetch(sub.callbackUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(eventPayload),
-        }).catch((err: unknown) => {
-          console.error(`[freepieces] Delivery to ${sub.callbackUrl} failed:`, err);
-        });
-      }
-    }),
-  );
-}
-
-/** Returns true when the piece is enabled (default: all bundled pieces are enabled). */
-async function isPieceEnabled(kv: KVNamespace, name: string): Promise<boolean> {
-  const flag = await kv.get(PIECE_FLAG(name));
-  return flag !== 'false';
-}
-
-function pieceSupportsStoredUsers(auth: unknown): boolean {
-  const authDefs = Array.isArray(auth) ? auth : auth ? [auth] : [];
-  return authDefs.some((authDef) => {
-    if (!authDef || typeof authDef !== 'object') return false;
-    const type = String((authDef as { type?: unknown }).type ?? '');
-    return type === 'oauth2' || type === 'OAUTH2';
-  });
-}
-
-/** Validate the session cookie and return the payload, or null if missing/invalid. */
-async function requireAdminSession(
-  request: Request,
-  env: Env
-): Promise<{ sub: string } | null> {
-  if (!env.ADMIN_SIGNING_KEY) return null;
-  const token = parseCookie(request.headers.get('cookie'), COOKIE_NAME);
-  if (!token) return null;
-  return verifySessionToken(token, env.ADMIN_SIGNING_KEY);
-}
-
-/** Build a Set-Cookie header value for the admin session. */
-function buildCookie(token: string, isSecure: boolean, maxAge: number): string {
-  const parts = [
-    `${COOKIE_NAME}=${token}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/admin',
-    `Max-Age=${maxAge}`
-  ];
-  if (isSecure) parts.push('Secure');
-  return parts.join('; ');
-}
-
-// ---------------------------------------------------------------------------
-// Worker
-// ---------------------------------------------------------------------------
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -947,132 +355,14 @@ export default {
         return json({ username: session.sub });
       }
 
-      // GET /admin/api/pieces
-      if (pathname === '/admin/api/pieces' && request.method === 'GET') {
-        const all = listPieces();
-        const envRecord = env as Record<string, unknown>;
-        const result = await Promise.all(
-          all.map(async (p) => ({
-            name: p.name,
-            displayName: p.displayName,
-            description: p.description ?? null,
-            version: p.version,
-            auth: p.auth,
-            actions: p.actions.map((a) => ({
-              name: a.name,
-              displayName: a.displayName,
-              description: a.description ?? null,
-              props: a.props ?? null,
-            })),
-            triggers: p.triggers.map((t) => ({
-              name: t.name,
-              displayName: t.displayName,
-              description: t.description ?? null,
-              type: t.type,
-              props: t.props ?? null,
-            })),
-            secrets: [
-                ...p.secrets,
-                ...(PIECE_EXTRA_SECRET_GROUPS[p.name] ?? []),
-              ]
-              .map((group) => ({
-                ...group,
-                secrets: group.secrets
-                  .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
-                  .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
-              }))
-              .filter((group) => group.secrets.length > 0),
-            supportsUsers: pieceSupportsStoredUsers(p.auth),
-            enabled: await isPieceEnabled(env.TOKEN_STORE, p.name)
-          }))
-        );
-        return json(result);
-      }
-
-      // GET /admin/api/pieces/:name/users
-      const usersMatch = /^\/admin\/api\/pieces\/([^/]+)\/users$/.exec(pathname);
-      if (usersMatch && request.method === 'GET') {
-        const name = decodeURIComponent(usersMatch[1]);
-        const piece = listPieces().find((entry) => entry.name === name);
-        if (!piece) return json({ error: 'Piece not found' }, { status: 404 });
-        if (!pieceSupportsStoredUsers(piece.auth)) {
-          return json({ error: 'Piece does not store user tokens' }, { status: 400 });
-        }
-
-        const users = (await listStoredUserIds(env.TOKEN_STORE, name)).map((userId) => ({
-          userId,
-          displayName: userId,
-        }));
-
-        return json({ users });
-      }
-
-      // GET /admin/api/secrets
-      if (pathname === '/admin/api/secrets' && request.method === 'GET') {
-        const envRecord = env as Record<string, unknown>;
-        const global = GLOBAL_SECRET_DEFS.map((def) => ({
-          key: def.key,
-          displayName: def.displayName,
-          description: def.description,
-          required: def.required,
-          command: def.command,
-          isSet: Boolean(envRecord[def.key]),
-        }));
-        const pieces = listPieces()
-          .map((p) => ({
-            name: p.name,
-            displayName: p.displayName,
-            groups: [
-                ...p.secrets,
-                ...(PIECE_EXTRA_SECRET_GROUPS[p.name] ?? []),
-              ]
-              .map((group) => ({
-                ...group,
-                secrets: group.secrets
-                  .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
-                  .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
-              }))
-              .filter((group) => group.secrets.length > 0),
-          }))
-          .filter((p) => p.groups.length > 0);
-        return json({ global, pieces });
-      }
-
-      // POST /admin/api/pieces/:name/install  → enable
-      const installMatch = /^\/admin\/api\/pieces\/([^/]+)\/install$/.exec(pathname);
-      if (installMatch && request.method === 'POST') {
-        const name = installMatch[1];
-        if (!getPiece(name)) return json({ error: 'Piece not found' }, { status: 404 });
-        await env.TOKEN_STORE.put(PIECE_FLAG(name), 'true');
-        return json({ ok: true, name, enabled: true });
-      }
-
-      // DELETE /admin/api/pieces/:name  → disable
-      const deleteMatch = /^\/admin\/api\/pieces\/([^/]+)$/.exec(pathname);
-      if (deleteMatch && request.method === 'DELETE') {
-        const name = deleteMatch[1];
-        if (!getPiece(name)) return json({ error: 'Piece not found' }, { status: 404 });
-        await env.TOKEN_STORE.put(PIECE_FLAG(name), 'false');
-        return json({ ok: true, name, enabled: false });
-      }
+      const adminResponse = await handleAdminApi(pathname, request, env, json);
+      if (adminResponse) return adminResponse;
 
       return json({ error: 'Not found' }, { status: 404 });
     }
 
-    // ── Seed tokens (admin-protected) ───────────────────────────────────────
-    // POST /auth/tokens/:piece
-    // Body: { userId, accessToken, refreshToken?, expiresIn? }
-    //
-    // Use this to store an OAuth2 access+refresh pair directly into KV without
-    // going through the browser OAuth flow.  Requires admin credentials via
-    // Basic auth (Authorization: Basic base64(user:pass)).
-    //
-    // Example (from slack-example.ts --seed-tokens):
-    //   curl -u admin:password -X POST /auth/tokens/slack \
-    //     -d '{ "userId": "alice", "accessToken": "xoxe-...", "refreshToken": "xoxe-r-...", "expiresIn": 43200 }'
-    //
-    // After seeding, use "Bearer alice" in subsequent /run calls to look up
-    // the stored token.
+    // ── Seed tokens (admin-protected, Basic auth) ─────────────────────────
+    // POST /auth/tokens/:piece  { userId, accessToken, refreshToken?, expiresIn? }
     if (pathname.startsWith('/auth/tokens/') && request.method === 'POST') {
       // Require Basic auth — same user/pass as admin panel.
       if (!env.ADMIN_USER || !env.ADMIN_PASSWORD) {
@@ -1115,16 +405,7 @@ export default {
       return json({ ok: true, piece: pieceName, userId });
     }
 
-    // ── Inbound webhook (Slack Events API Request URL and equivalents) ────────
-    //
-    // Point Slack → Event Subscriptions → Request URL to:
-    //   https://<your-worker>.workers.dev/webhook/slack
-    //
-    // Handles:
-    //   • Slack URL verification challenge (responds synchronously)
-    //   • Slack request signature verification (when SLACK_SIGNING_SECRET is set)
-    //   • Fan-out to all registered subscriptions via ctx.waitUntil()
-    //
+    // ── Inbound webhook (Slack Events API and equivalents) ──────────────────
     const webhookMatch = /^\/webhook\/([^/]+)$/.exec(pathname);
     if (webhookMatch && request.method === 'POST') {
       const pieceName = decodeURIComponent(webhookMatch[1]);
@@ -1138,9 +419,9 @@ export default {
       const rawBody = await request.text();
 
       // Verify Slack signature when the signing secret is configured
-      const envRecord2 = env as Record<string, string>;
+      const envRecord = env as Record<string, string>;
       const signingSecretKey = `${pieceName.toUpperCase().replace(/-/g, '_')}_SIGNING_SECRET`;
-      const signingSecret = envRecord2[signingSecretKey] as string | undefined;
+      const signingSecret = envRecord[signingSecretKey] as string | undefined;
       if (signingSecret) {
         const timestamp = request.headers.get('x-slack-request-timestamp') ?? '';
         const signature = request.headers.get('x-slack-signature') ?? '';
@@ -1174,10 +455,7 @@ export default {
     // ── Webhook subscriptions ─────────────────────────────────────────────────
 
     // POST /subscriptions/:piece/:trigger
-    //   Body: { callbackUrl?: string, queueName?: string, propsValue?: Record<string,unknown> }
-    //   Exactly one of callbackUrl or queueName is required.
-    //   Auth: runtime auth headers (stored with the subscription for future trigger dispatch)
-    //   Returns: { ok, id, webhookUrl }
+    //   Body: { callbackUrl | queueName, propsValue? }
     const subCreateMatch = /^\/subscriptions\/([^/]+)\/([^/]+)$/.exec(pathname);
     if (subCreateMatch && request.method === 'POST') {
       const pieceName = decodeURIComponent(subCreateMatch[1]);
@@ -1248,8 +526,7 @@ export default {
       return json({ ok: true, id: subId, webhookUrl }, { status: 201 });
     }
 
-    // GET /subscriptions/:piece
-    //   Auth: runtime auth headers (returns only subscriptions associated with this identity)
+    // GET /subscriptions/:piece  (returns only caller's subscriptions)
     const subListMatch = /^\/subscriptions\/([^/]+)$/.exec(pathname);
     if (subListMatch && request.method === 'GET') {
       const pieceName = decodeURIComponent(subListMatch[1]);
@@ -1273,8 +550,7 @@ export default {
       return json({ ok: true, subscriptions: mine });
     }
 
-    // DELETE /subscriptions/:piece/:trigger/:id
-    //   Auth: runtime auth headers (must match the identity used to create the subscription)
+    // DELETE /subscriptions/:piece/:trigger/:id  (must match creation identity)
     const subDeleteMatch = /^\/subscriptions\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(pathname);
     if (subDeleteMatch && request.method === 'DELETE') {
       const pieceName = decodeURIComponent(subDeleteMatch[1]);

@@ -30,6 +30,7 @@
     "build": "tsc --noEmit && vite build && pnpm run build:admin && pnpm run build:cli && pnpm run build:sdk",
     "build:sdk": "tsc --project tsconfig.sdk.json",
     "build:admin": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.admin.ts",
+    "build:ghpages": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.ghpages.ts && cp dist/ghpages/index.html dist/ghpages/404.html",
     "build:cli": "tsc --project tsconfig.cli.json && chmod +x dist/cli/bin.js",
     "check": "tsc --noEmit && tsc --noEmit --project tsconfig.client.json && tsc --noEmit --project tsconfig.admin.json && tsc --noEmit --project tsconfig.sdk.json",
     "test": "vitest run",
