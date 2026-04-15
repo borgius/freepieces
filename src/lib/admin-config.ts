@@ -1,16 +1,9 @@
 /**
  * Admin panel configuration constants and helpers.
  *
- * Global/per-piece secret definitions, piece-enable flags, session
- * validation, and cookie building for the admin SPA.
+ * Global/per-piece secret definitions, piece-enable flags, and
+ * stored-user detection for the admin SPA.
  */
-
-import {
-  verifySessionToken,
-  parseCookie,
-  COOKIE_NAME,
-} from './admin-session';
-import type { Env } from '../framework/types';
 
 // ---------------------------------------------------------------------------
 // Piece-enable flag
@@ -122,28 +115,4 @@ export function pieceSupportsStoredUsers(auth: unknown): boolean {
     const type = String((authDef as { type?: unknown }).type ?? '');
     return type === 'oauth2' || type === 'OAUTH2';
   });
-}
-
-/** Validate the session cookie and return the payload, or null if missing/invalid. */
-export async function requireAdminSession(
-  request: Request,
-  env: Env,
-): Promise<{ sub: string } | null> {
-  if (!env.ADMIN_SIGNING_KEY) return null;
-  const token = parseCookie(request.headers.get('cookie'), COOKIE_NAME);
-  if (!token) return null;
-  return verifySessionToken(token, env.ADMIN_SIGNING_KEY);
-}
-
-/** Build a Set-Cookie header value for the admin session. */
-export function buildCookie(token: string, isSecure: boolean, maxAge: number): string {
-  const parts = [
-    `${COOKIE_NAME}=${token}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/admin',
-    `Max-Age=${maxAge}`,
-  ];
-  if (isSecure) parts.push('Secure');
-  return parts.join('; ');
 }

@@ -4,13 +4,22 @@
  */
 
 import { Hono } from 'hono';
+import { timeout } from 'hono/timeout';
 import { getPiece, getTrigger } from '../framework/registry';
-import { resolveRuntimeRequestAuth } from '../lib/request-auth';
+import { runtimeAuth } from '../lib/runtime-auth-middleware';
 import { buildApContext, buildApTriggerContext } from '../lib/ap-context';
 import { resolveNativeRuntimeAuth, resolveApRuntimeAuth } from '../lib/auth-resolve';
 import type { Env, PieceTriggerContext } from '../framework/types';
+import type { RuntimeRequestCredentials } from '../lib/request-auth';
 
-const runtimeApi = new Hono<{ Bindings: Env }>();
+const runtimeApi = new Hono<{
+  Bindings: Env;
+  Variables: { credentials: RuntimeRequestCredentials };
+}>();
+runtimeApi.use('/run/*', runtimeAuth);
+runtimeApi.use('/run/*', timeout(30_000));
+runtimeApi.use('/trigger/*', runtimeAuth);
+runtimeApi.use('/trigger/*', timeout(30_000));
 
 // ── Run action ───────────────────────────────────────────────────────────
 runtimeApi.all('/run/:piece/:action', async (c) => {
@@ -21,11 +30,7 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
     return c.json({ error: 'Action not found' }, 404);
   }
 
-  const authResult = resolveRuntimeRequestAuth(c.req.raw.headers, c.env.RUN_API_KEY);
-  if (!authResult.ok) {
-    return c.json({ error: authResult.error }, authResult.status);
-  }
-  const { userId, pieceToken, pieceAuthProps } = authResult.credentials;
+  const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
 
   let auth: Record<string, string> | undefined;
 
@@ -93,11 +98,7 @@ runtimeApi.post('/trigger/:piece/:trigger', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const authResult = resolveRuntimeRequestAuth(c.req.raw.headers, c.env.RUN_API_KEY);
-  if (!authResult.ok) {
-    return c.json({ error: authResult.error }, authResult.status);
-  }
-  const { userId, pieceToken, pieceAuthProps } = authResult.credentials;
+  const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
 
   try {
     if (stored.kind === 'native') {

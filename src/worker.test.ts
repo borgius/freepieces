@@ -62,6 +62,37 @@ async function createAdminCookie(env: Env): Promise<string> {
   return `${COOKIE_NAME}=${token}`;
 }
 
+describe('admin login', () => {
+  it('returns ok and set-cookie on valid credentials', async () => {
+    const env = createEnv(new MemoryKv() as unknown as KVNamespace);
+    const request = new Request('https://freepieces.example.workers.dev/admin/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'password' }),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(response.headers.get('set-cookie')).toContain('__fp_admin=');
+  });
+
+  it('rejects invalid credentials', async () => {
+    const env = createEnv(new MemoryKv() as unknown as KVNamespace);
+    const request = new Request('https://freepieces.example.workers.dev/admin/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'wrong' }),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Invalid credentials' });
+  });
+});
+
 describe('admin piece users', () => {
   it('marks OAuth-backed pieces as supporting users', async () => {
     const env = createEnv(new MemoryKv() as unknown as KVNamespace);

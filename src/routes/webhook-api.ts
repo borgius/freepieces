@@ -5,7 +5,7 @@
 
 import { Hono } from 'hono';
 import { getPiece, getTrigger } from '../framework/registry';
-import { resolveRuntimeRequestAuth } from '../lib/request-auth';
+import { runtimeAuth } from '../lib/runtime-auth-middleware';
 import {
   dispatchWebhook,
   listSubscriptions,
@@ -16,8 +16,12 @@ import {
 } from '../lib/webhook';
 import type { WebhookSubscription } from '../lib/webhook';
 import type { Env } from '../framework/types';
+import type { RuntimeRequestCredentials } from '../lib/request-auth';
 
-const webhookApi = new Hono<{ Bindings: Env }>();
+const webhookApi = new Hono<{
+  Bindings: Env;
+  Variables: { credentials: RuntimeRequestCredentials };
+}>();
 
 // ── Inbound webhook (Slack Events API and equivalents) ──────────────────
 webhookApi.post('/webhook/:piece', async (c) => {
@@ -66,6 +70,7 @@ webhookApi.post('/webhook/:piece', async (c) => {
 });
 
 // ── Webhook subscriptions ─────────────────────────────────────────────────
+webhookApi.use('/subscriptions/*', runtimeAuth);
 
 // POST /subscriptions/:piece/:trigger
 webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
@@ -80,11 +85,7 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
     return c.json({ error: 'Trigger not found' }, 404);
   }
 
-  const authResult = resolveRuntimeRequestAuth(c.req.raw.headers, c.env.RUN_API_KEY);
-  if (!authResult.ok) {
-    return c.json({ error: authResult.error }, authResult.status);
-  }
-  const { userId, pieceToken, pieceAuthProps } = authResult.credentials;
+  const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
 
   let subBody: { callbackUrl?: string; queueName?: string; propsValue?: Record<string, unknown> };
   try {
@@ -144,14 +145,9 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
 webhookApi.get('/subscriptions/:piece', async (c) => {
   const pieceName = c.req.param('piece');
 
-  const authResult = resolveRuntimeRequestAuth(c.req.raw.headers, c.env.RUN_API_KEY);
-  if (!authResult.ok) {
-    return c.json({ error: authResult.error }, authResult.status);
-  }
-
   const allSubs = await listSubscriptions(c.env.TOKEN_STORE, pieceName);
   const mine = allSubs
-    .filter((s) => sameSubscriptionOwner(s, authResult.credentials))
+    .filter((s) => sameSubscriptionOwner(s, c.var.credentials))
     .map((s) => ({
       id: s.id,
       trigger: s.trigger,
@@ -168,16 +164,11 @@ webhookApi.delete('/subscriptions/:piece/:trigger/:id', async (c) => {
   const pieceName = c.req.param('piece');
   const subDelId = c.req.param('id');
 
-  const authResult = resolveRuntimeRequestAuth(c.req.raw.headers, c.env.RUN_API_KEY);
-  if (!authResult.ok) {
-    return c.json({ error: authResult.error }, authResult.status);
-  }
-
   const rawSub = await c.env.TOKEN_STORE.get(SUB_KEY(pieceName, subDelId));
   if (!rawSub) return c.json({ error: 'Subscription not found' }, 404);
 
   const existingSub = JSON.parse(rawSub) as WebhookSubscription;
-  if (!sameSubscriptionOwner(existingSub, authResult.credentials)) {
+  if (!sameSubscriptionOwner(existingSub, c.var.credentials)) {
     return c.json({ error: 'Forbidden' }, 403);
   }
 

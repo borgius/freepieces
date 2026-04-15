@@ -6,18 +6,17 @@
  */
 
 import { Hono } from 'hono';
+import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece } from '../framework/registry';
 import { listStoredUserIds } from '../lib/token-store';
-import { createSessionToken, timingSafeEqual } from '../lib/admin-session';
+import { COOKIE_NAME, createSessionToken, verifySessionToken, timingSafeEqual } from '../lib/admin-session';
 import {
-  buildCookie,
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
   PIECE_EXTRA_SECRET_GROUPS,
   PIECE_FLAG,
   isPieceEnabled,
   pieceSupportsStoredUsers,
-  requireAdminSession,
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
 
@@ -45,23 +44,32 @@ adminApi.post('/login', async (c) => {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
   const token = await createSessionToken(username, c.env.ADMIN_SIGNING_KEY);
-  const isSecure = c.req.url.startsWith('https://');
-  c.header('set-cookie', buildCookie(token, isSecure, 86400));
+  setCookie(c, COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: c.req.url.startsWith('https://'),
+    sameSite: 'Strict',
+    path: '/admin',
+    maxAge: 86400,
+  });
   return c.json({ ok: true });
 });
 
 adminApi.post('/logout', (c) => {
-  const isSecure = c.req.url.startsWith('https://');
-  c.header('set-cookie', buildCookie('', isSecure, 0));
+  deleteCookie(c, COOKIE_NAME, { path: '/admin' });
   return c.json({ ok: true });
 });
 
 // ── Session middleware — protects all routes below ───────────────────────
 adminApi.use('*', async (c, next) => {
-  const session = await requireAdminSession(c.req.raw, c.env);
-  if (!session) {
-    return c.json({ error: 'Unauthorized' }, 401);
+  // Login and logout are unauthenticated — skip session check
+  if (c.req.path.endsWith('/login') || c.req.path.endsWith('/logout')) {
+    return next();
   }
+  if (!c.env.ADMIN_SIGNING_KEY) return c.json({ error: 'Unauthorized' }, 401);
+  const token = getCookie(c, COOKIE_NAME);
+  if (!token) return c.json({ error: 'Unauthorized' }, 401);
+  const session = await verifySessionToken(token, c.env.ADMIN_SIGNING_KEY);
+  if (!session) return c.json({ error: 'Unauthorized' }, 401);
   c.set('session', session);
   await next();
 });

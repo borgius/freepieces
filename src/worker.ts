@@ -1,6 +1,8 @@
 /** Cloudflare Workers entrypoint for freepieces. */
 
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { secureHeaders } from 'hono/secure-headers';
 import { listPieces, getPiece } from './framework/registry';
 import { dispatchWebhook } from './lib/webhook';
 import adminApi from './routes/admin-api';
@@ -11,6 +13,19 @@ import './pieces/index.js';
 import type { Env } from './framework/types';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// ── Security headers ────────────────────────────────────────────────────
+app.use(secureHeaders());
+
+// ── Error handling ──────────────────────────────────────────────────────
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    if (err.res) return err.getResponse();
+    return c.json({ error: err.message }, err.status);
+  }
+  console.error('[freepieces] Unhandled error:', err);
+  return c.json({ error: 'Internal server error' }, 500);
+});
 
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (c) => c.json({ ok: true, service: 'freepieces', version: '0.1.0' }));

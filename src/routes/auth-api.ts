@@ -4,6 +4,7 @@
  */
 
 import { Hono } from 'hono';
+import { basicAuth } from 'hono/basic-auth';
 import { getPiece } from '../framework/registry';
 import { buildCallbackUrl } from '../framework/auth';
 import {
@@ -93,45 +94,43 @@ authApi.get('/callback/:piece', async (c) => {
 });
 
 // ── Seed tokens (admin-protected, Basic auth) ─────────────────────────
-authApi.post('/tokens/:piece', async (c) => {
-  if (!c.env.ADMIN_USER || !c.env.ADMIN_PASSWORD) {
-    return c.json({ error: 'Admin credentials not configured' }, 503);
-  }
-  const authHeader = c.req.header('authorization') ?? '';
-  let authed = false;
-  if (authHeader.startsWith('Basic ')) {
-    const decoded = atob(authHeader.slice(6));
-    const colonIdx = decoded.indexOf(':');
-    if (colonIdx > 0) {
-      const user = decoded.slice(0, colonIdx);
-      const pass = decoded.slice(colonIdx + 1);
-      authed = timingSafeEqual(user, c.env.ADMIN_USER) && timingSafeEqual(pass, c.env.ADMIN_PASSWORD);
+authApi.post(
+  '/tokens/:piece',
+  async (c, next) => {
+    if (!c.env.ADMIN_USER || !c.env.ADMIN_PASSWORD) {
+      return c.json({ error: 'Admin credentials not configured' }, 503);
     }
-  }
-  if (!authed) return c.json({ error: 'Unauthorized' }, 401);
+    return basicAuth({
+      verifyUser: (username, password) =>
+        timingSafeEqual(username, c.env.ADMIN_USER!) &&
+        timingSafeEqual(password, c.env.ADMIN_PASSWORD!),
+      invalidUserMessage: { error: 'Unauthorized' },
+    })(c, next);
+  },
+  async (c) => {
+    const pieceName = c.req.param('piece');
+    if (!getPiece(pieceName)) return c.json({ error: 'Piece not found' }, 404);
 
-  const pieceName = c.req.param('piece');
-  if (!getPiece(pieceName)) return c.json({ error: 'Piece not found' }, 404);
+    let body: { userId?: string; accessToken?: string; refreshToken?: string; expiresIn?: number };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400);
+    }
+    const { userId, accessToken, refreshToken, expiresIn } = body;
+    if (!userId || !accessToken) {
+      return c.json({ error: 'Missing required fields: userId, accessToken' }, 400);
+    }
 
-  let body: { userId?: string; accessToken?: string; refreshToken?: string; expiresIn?: number };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'Invalid JSON body' }, 400);
-  }
-  const { userId, accessToken, refreshToken, expiresIn } = body;
-  if (!userId || !accessToken) {
-    return c.json({ error: 'Missing required fields: userId, accessToken' }, 400);
-  }
-
-  const record: OAuthTokenRecord = {
-    accessToken,
-    refreshToken,
-    expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
-    tokenType: 'Bearer',
-  };
-  await storeToken(c.env.TOKEN_STORE, pieceName, userId, record, c.env.TOKEN_ENCRYPTION_KEY);
-  return c.json({ ok: true, piece: pieceName, userId });
-});
+    const record: OAuthTokenRecord = {
+      accessToken,
+      refreshToken,
+      expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
+      tokenType: 'Bearer',
+    };
+    await storeToken(c.env.TOKEN_STORE, pieceName, userId, record, c.env.TOKEN_ENCRYPTION_KEY);
+    return c.json({ ok: true, piece: pieceName, userId });
+  },
+);
 
 export default authApi;
