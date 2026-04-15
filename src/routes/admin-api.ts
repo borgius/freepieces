@@ -8,7 +8,9 @@
 import { Hono } from 'hono';
 import { listPieces, getPiece } from '../framework/registry';
 import { listStoredUserIds } from '../lib/token-store';
+import { createSessionToken, timingSafeEqual } from '../lib/admin-session';
 import {
+  buildCookie,
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
   PIECE_EXTRA_SECRET_GROUPS,
@@ -24,7 +26,37 @@ const adminApi = new Hono<{
   Variables: { session: { sub: string } };
 }>();
 
-// Admin session auth middleware — applied to all routes in this sub-app
+// ── Unauthenticated routes (before session middleware) ───────────────────
+
+adminApi.post('/login', async (c) => {
+  if (!c.env.ADMIN_USER || !c.env.ADMIN_PASSWORD || !c.env.ADMIN_SIGNING_KEY) {
+    return c.json({ error: 'Admin credentials not configured' }, 503);
+  }
+  let body: { username?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const { username = '', password = '' } = body;
+  const validUser = timingSafeEqual(username, c.env.ADMIN_USER);
+  const validPass = timingSafeEqual(password, c.env.ADMIN_PASSWORD);
+  if (!validUser || !validPass) {
+    return c.json({ error: 'Invalid credentials' }, 401);
+  }
+  const token = await createSessionToken(username, c.env.ADMIN_SIGNING_KEY);
+  const isSecure = c.req.url.startsWith('https://');
+  c.header('set-cookie', buildCookie(token, isSecure, 86400));
+  return c.json({ ok: true });
+});
+
+adminApi.post('/logout', (c) => {
+  const isSecure = c.req.url.startsWith('https://');
+  c.header('set-cookie', buildCookie('', isSecure, 0));
+  return c.json({ ok: true });
+});
+
+// ── Session middleware — protects all routes below ───────────────────────
 adminApi.use('*', async (c, next) => {
   const session = await requireAdminSession(c.req.raw, c.env);
   if (!session) {
