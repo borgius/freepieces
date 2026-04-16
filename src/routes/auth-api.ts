@@ -28,10 +28,15 @@ authApi.get('/login/:piece', async (c) => {
   }
 
   const userId = c.req.query('userId');
-  if (!userId) return c.json({ error: 'Missing userId query parameter' }, 400);
+  const authDef = stored.def.auth as OAuth2AuthDefinition;
+
+  // userId is optional when the piece has userInfoUrl — resolved from the provider on callback
+  const resolvedUserId = userId || (authDef.userInfoUrl ? '_auto_' : '');
+  if (!resolvedUserId) return c.json({ error: 'Missing userId query parameter' }, 400);
+
+  const returnUrl = c.req.query('returnUrl');
 
   const callbackUrl = buildCallbackUrl(c.env.FREEPIECES_PUBLIC_URL, pieceName);
-  const authDef = stored.def.auth as OAuth2AuthDefinition;
   let clientId: string;
   try {
     ({ clientId } = resolveOAuthClientCredentials(authDef, c.env));
@@ -46,7 +51,8 @@ authApi.get('/login/:piece', async (c) => {
     callbackUrl,
     clientId,
     encryptionKey: c.env.TOKEN_ENCRYPTION_KEY,
-    userId,
+    userId: resolvedUserId,
+    returnUrl,
   });
 
   return c.redirect(loginUrl, 302);
@@ -64,12 +70,22 @@ authApi.get('/callback/:piece', async (c) => {
   try {
     const url = new URL(c.req.url);
     const callbackUrl = buildCallbackUrl(c.env.FREEPIECES_PUBLIC_URL, pieceName);
-    const { userId } = await handleCallback(
+    const { userId, returnUrl } = await handleCallback(
       url.searchParams,
       stored.def.auth as OAuth2AuthDefinition,
       c.env,
       callbackUrl,
     );
+
+    // If a same-origin returnUrl was provided, redirect back to the admin UI
+    if (returnUrl) {
+      const target = new URL(returnUrl, c.env.FREEPIECES_PUBLIC_URL);
+      const origin = new URL(c.env.FREEPIECES_PUBLIC_URL).origin;
+      if (target.origin === origin) {
+        return c.redirect(target.toString(), 302);
+      }
+    }
+
     return c.json({
       ok: true,
       message: 'Token stored successfully. You may close this window.',

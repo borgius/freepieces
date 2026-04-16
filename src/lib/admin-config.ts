@@ -116,3 +116,13 @@ export function pieceSupportsStoredUsers(auth: unknown): boolean {
     return type === 'oauth2' || type === 'OAUTH2';
   });
 }
+
+/** True when at least one OAuth2 auth mode has a userInfoUrl configured. */
+export function pieceHasAutoUserId(auth: unknown): boolean {
+  const authDefs = Array.isArray(auth) ? auth : auth ? [auth] : [];
+  return authDefs.some((authDef) => {
+    if (!authDef || typeof authDef !== 'object') return false;
+    const a = authDef as { type?: unknown; userInfoUrl?: unknown };
+    return (a.type === 'oauth2' || a.type === 'OAUTH2') && typeof a.userInfoUrl === 'string' && a.userInfoUrl.length > 0;
+  });
+}

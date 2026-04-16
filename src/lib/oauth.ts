@@ -22,6 +22,7 @@ interface OAuthState {
   pieceName: string;
   userId: string;
   nonce: string;
+  returnUrl?: string;
 }
 
 async function hmacSign(message: string, hexKey: string): Promise<string> {
@@ -108,13 +109,13 @@ export async function buildLoginUrl(
     clientId: string;
     encryptionKey: string;
     userId: string;
+    returnUrl?: string;
   }
 ): Promise<string> {
   const nonce = toBase64Url(crypto.getRandomValues(new Uint8Array(16)));
-  const state = await encodeState(
-    { pieceName: options.pieceName, userId: options.userId, nonce },
-    options.encryptionKey
-  );
+  const statePayload: OAuthState = { pieceName: options.pieceName, userId: options.userId, nonce };
+  if (options.returnUrl) statePayload.returnUrl = options.returnUrl;
+  const state = await encodeState(statePayload, options.encryptionKey);
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -164,7 +165,7 @@ export async function handleCallback(
   auth: OAuth2AuthDefinition,
   env: Env,
   callbackUrl: string
-): Promise<{ userId: string; record: OAuthTokenRecord }> {
+): Promise<{ userId: string; record: OAuthTokenRecord; returnUrl?: string }> {
   const code = searchParams.get('code');
   const rawState = searchParams.get('state');
 
@@ -212,9 +213,28 @@ export async function handleCallback(
     tokenType: data.token_type ?? 'Bearer'
   };
 
-  await storeToken(env.TOKEN_STORE, state.pieceName, state.userId, record, env.TOKEN_ENCRYPTION_KEY);
+  // Auto-resolve userId from the provider when the caller didn't supply one
+  let userId = state.userId;
+  if (userId === '_auto_' && auth.userInfoUrl) {
+    const infoResp = await fetch(auth.userInfoUrl, {
+      headers: { authorization: `Bearer ${record.accessToken}` },
+    });
+    if (infoResp.ok) {
+      const info = (await infoResp.json()) as Record<string, unknown>;
+      const field = auth.userIdField ?? 'email';
+      const resolved = info[field];
+      if (typeof resolved === 'string' && resolved.length > 0) {
+        userId = resolved;
+      }
+    }
+    if (userId === '_auto_') {
+      throw new Error('Could not resolve user identity from provider');
+    }
+  }
 
-  return { userId: state.userId, record };
+  await storeToken(env.TOKEN_STORE, state.pieceName, userId, record, env.TOKEN_ENCRYPTION_KEY);
+
+  return { userId, record, returnUrl: state.returnUrl };
 }
 
 // ---------------------------------------------------------------------------

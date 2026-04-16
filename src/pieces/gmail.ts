@@ -735,6 +735,8 @@ export const gmailPiece = createPiece({
     scopes: GMAIL_SCOPES,
     clientIdEnvKey: 'GMAIL_CLIENT_ID',
     clientSecretEnvKey: 'GMAIL_CLIENT_SECRET',
+    userInfoUrl: 'https://www.googleapis.com/oauth2/v2/userinfo',
+    userIdField: 'email',
   },
   actions: [
     { name: 'send_email', displayName: 'Send Email', description: 'Send an email through a Gmail account', run: sendEmail },

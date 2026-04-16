@@ -85,6 +85,8 @@ export interface PieceInfo {
   triggers: PieceTrigger[];
   secrets: SecretGroup[];
   supportsUsers: boolean;
+  /** True when the piece can auto-resolve userId from the provider (e.g. Google email). */
+  hasAutoUserId: boolean;
   enabled: boolean;
 }
 
@@ -136,6 +138,13 @@ export async function listPieceUsers(name: string): Promise<PieceUser[]> {
     `/admin/api/pieces/${encodeURIComponent(name)}/users`
   );
   return response.users;
+}
+
+export async function deletePieceUser(name: string, userId: string): Promise<void> {
+  await apiFetch(
+    `/admin/api/pieces/${encodeURIComponent(name)}/users/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' }
+  );
 }
 
 export async function getSecrets(): Promise<SecretsResponse> {

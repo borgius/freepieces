@@ -8,7 +8,7 @@
 import { Hono } from 'hono';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece } from '../framework/registry';
-import { listStoredUserIds } from '../lib/token-store';
+import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { COOKIE_NAME, createSessionToken, verifySessionToken, timingSafeEqual } from '../lib/admin-session';
 import {
   GLOBAL_SECRET_DEFS,
@@ -16,6 +16,7 @@ import {
   PIECE_EXTRA_SECRET_GROUPS,
   PIECE_FLAG,
   isPieceEnabled,
+  pieceHasAutoUserId,
   pieceSupportsStoredUsers,
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
@@ -115,6 +116,7 @@ adminApi.get('/pieces', async (c) => {
         }))
         .filter((group) => group.secrets.length > 0),
       supportsUsers: pieceSupportsStoredUsers(p.auth),
+      hasAutoUserId: pieceHasAutoUserId(p.auth),
       enabled: await isPieceEnabled(c.env.TOKEN_STORE, p.name),
     })),
   );
@@ -136,6 +138,19 @@ adminApi.get('/pieces/:name/users', async (c) => {
   }));
 
   return c.json({ users });
+});
+
+// DELETE /admin/api/pieces/:name/users/:userId
+adminApi.delete('/pieces/:name/users/:userId', async (c) => {
+  const name = c.req.param('name');
+  const userId = c.req.param('userId');
+  const piece = listPieces().find((entry) => entry.name === name);
+  if (!piece) return c.json({ error: 'Piece not found' }, 404);
+  if (!pieceSupportsStoredUsers(piece.auth)) {
+    return c.json({ error: 'Piece does not store user tokens' }, 400);
+  }
+  await deleteToken(c.env.TOKEN_STORE, name, userId);
+  return c.json({ ok: true });
 });
 
 // GET /admin/api/secrets

@@ -16,12 +16,13 @@ import {
   type PieceInfo,
   type PieceUser,
   type SecretGroup,
+  deletePieceUser,
   installPiece,
   listPieceUsers,
   uninstallPiece,
 } from '../lib/api';
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, KeyRound, Users, Webhook, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, KeyRound, Trash2, Users, Webhook, Zap } from 'lucide-react';
 import { CollapsibleSection } from './ItemSection';
 
 const AUTH_PALETTE: Record<string, string> = {
@@ -205,18 +206,14 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
   );
 }
 
-function UsersSection({ pieceName }: { pieceName: string }) {
+function UsersSection({ pieceName, isOAuth2, hasAutoUserId }: { pieceName: string; isOAuth2: boolean; hasAutoUserId: boolean }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [users, setUsers] = useState<PieceUser[] | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
 
-  async function handleToggle() {
-    const nextOpen = !open;
-    setOpen(nextOpen);
-
-    if (!nextOpen || loading || users !== null) return;
-
+  async function loadUsers() {
     setLoading(true);
     setError('');
     try {
@@ -225,6 +222,59 @@ function UsersSection({ pieceName }: { pieceName: string }) {
       setError(err instanceof Error ? err.message : 'Failed to load users');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleToggle() {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (!nextOpen || loading || users !== null) return;
+    await loadUsers();
+  }
+
+  async function handleRemoveUser(userId: string) {
+    setRemoving(userId);
+    setError('');
+    try {
+      await deletePieceUser(pieceName, userId);
+      setUsers((prev) => prev?.filter((u) => u.userId !== userId) ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove user');
+    } finally {
+      setRemoving(null);
+    }
+  }
+
+  function handleAddUser() {
+    const params = new URLSearchParams({ returnUrl: '/admin' });
+
+    // When the piece can auto-resolve userId from the provider, skip the prompt
+    if (!hasAutoUserId) {
+      const userId = window.prompt('Enter a user ID for the new OAuth2 connection:');
+      if (!userId?.trim()) return;
+      params.set('userId', userId.trim());
+    }
+
+    const loginUrl = `/auth/login/${encodeURIComponent(pieceName)}?${params}`;
+    const popup = window.open(loginUrl, '_blank');
+
+    // Refresh the user list when the popup closes or when this tab regains focus
+    function onFocus() {
+      window.removeEventListener('focus', onFocus);
+      void loadUsers();
+    }
+    if (popup) {
+      const timer = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(timer);
+          void loadUsers();
+        }
+      }, 500);
+      // Safety: stop polling after 5 minutes
+      setTimeout(() => clearInterval(timer), 5 * 60 * 1000);
+    } else {
+      // Popup blocked — fall back to focus listener
+      window.addEventListener('focus', onFocus);
     }
   }
 
@@ -307,22 +357,48 @@ function UsersSection({ pieceName }: { pieceName: string }) {
                   )}
                 </VStack>
 
-                <ClipboardRoot value={user.userId} timeout={1500}>
-                  <ClipboardTrigger asChild>
-                    <Box
-                      as="button"
-                      color="gray.400"
-                      _hover={{ color: 'teal.500' }}
-                      flexShrink={0}
-                      title="Copy user id"
-                    >
-                      <Copy size={12} />
-                    </Box>
-                  </ClipboardTrigger>
-                </ClipboardRoot>
+                <HStack gap={1} flexShrink={0}>
+                  <ClipboardRoot value={user.userId} timeout={1500}>
+                    <ClipboardTrigger asChild>
+                      <Box
+                        as="button"
+                        color="gray.400"
+                        _hover={{ color: 'teal.500' }}
+                        flexShrink={0}
+                        title="Copy user id"
+                      >
+                        <Copy size={12} />
+                      </Box>
+                    </ClipboardTrigger>
+                  </ClipboardRoot>
+                  <Box
+                    as="button"
+                    color="gray.400"
+                    _hover={{ color: 'red.500' }}
+                    flexShrink={0}
+                    title="Remove user"
+                    onClick={() => void handleRemoveUser(user.userId)}
+                    aria-disabled={removing === user.userId}
+                    opacity={removing === user.userId ? 0.5 : 1}
+                    pointerEvents={removing === user.userId ? 'none' : undefined}
+                  >
+                    <Trash2 size={12} />
+                  </Box>
+                </HStack>
               </HStack>
             </Box>
           ))}
+
+          {isOAuth2 && (
+            <Button
+              size="xs"
+              variant="outline"
+              colorPalette="teal"
+              onClick={handleAddUser}
+            >
+              + Add User
+            </Button>
+          )}
         </VStack>
       )}
     </Box>
@@ -430,7 +506,7 @@ export function PieceCard({ piece, onToggle }: Props) {
           />
         )}
 
-        {piece.supportsUsers && <UsersSection pieceName={piece.name} />}
+        {piece.supportsUsers && <UsersSection pieceName={piece.name} isOAuth2={authTypes.includes('oauth2') || authTypes.includes('OAUTH2')} hasAutoUserId={piece.hasAutoUserId} />}
 
         <SecretsSection groups={piece.secrets} />
       </Card.Body>

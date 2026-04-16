@@ -72,6 +72,17 @@ export interface OAuth2AuthDefinition {
   clientIdEnvKey: string;
   /** Env key for this piece's OAuth client secret. */
   clientSecretEnvKey: string;
+  /**
+   * Optional URL to fetch the authorized user's profile after token exchange.
+   * When set, the callback can auto-resolve the userId from the provider
+   * (e.g. Google's userinfo endpoint returns { email }).
+   */
+  userInfoUrl?: string;
+  /**
+   * JSON field in the userInfoUrl response to use as the userId.
+   * Defaults to 'email'.
+   */
+  userIdField?: string;
 }
 
 export interface ApiKeyAuthDefinition {

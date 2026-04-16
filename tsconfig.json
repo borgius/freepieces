@@ -10,5 +10,5 @@
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["src/client", "src/admin", "src/cli"]
+  "exclude": ["src/client", "src/admin", "src/ghpages", "src/cli"]
 }
