@@ -40,14 +40,14 @@ const DocsPage = lazy(async () => {
 
 export function App() {
   const [view, setView] = useState<View>('loading');
-  const [username, setUsername] = useState('');
+  const [userEmail, setUserEmail] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('pieces');
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     getMe()
-      .then(({ username: u }) => {
-        setUsername(u);
+      .then(({ email }) => {
+        setUserEmail(email);
         setView('app');
       })
       .catch(() => setView('login'));
@@ -59,7 +59,7 @@ export function App() {
       await logout();
     } finally {
       setLoggingOut(false);
-      setUsername('');
+      setUserEmail('');
       setActiveTab('pieces');
       setView('login');
     }
@@ -73,14 +73,7 @@ export function App() {
         </Center>
       )}
 
-      {view === 'login' && (
-        <LoginPage
-          onLogin={(u) => {
-            setUsername(u);
-            setView('app');
-          }}
-        />
-      )}
+      {view === 'login' && <LoginPage />}
 
       {view === 'app' && (
         <Box minH="100vh" bg="gray.50">
@@ -114,7 +107,7 @@ export function App() {
                 </HStack>
               </HStack>
               <HStack gap={4}>
-                <Text fontSize="sm" color="gray.500">{username}</Text>
+                <Text fontSize="sm" color="gray.500">{userEmail}</Text>
                 <Button
                   size="sm"
                   variant="outline"

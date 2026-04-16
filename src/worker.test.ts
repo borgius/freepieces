@@ -1,7 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker from './worker';
-import { COOKIE_NAME, createSessionToken } from './lib/admin-session';
 import type { Env } from './framework/types';
+
+// Mock the OpenAuth client so admin session verification works in tests
+vi.mock('./auth/client', () => ({
+  subjects: {
+    admin: { type: 'admin' },
+    user: { type: 'user' },
+  },
+  createAuthClient: () => ({
+    verify: async (_subjects: unknown, token: string) => {
+      if (token === 'valid-admin-token') {
+        return {
+          subject: {
+            type: 'admin',
+            properties: { userId: 'admin-user', email: 'admin@example.com', role: 'admin' },
+          },
+        };
+      }
+      return { err: new Error('Invalid token') };
+    },
+    authorize: async () => ({
+      url: 'https://auth.example.com/authorize',
+    }),
+  }),
+}));
 
 class MemoryKv {
   private readonly store = new Map<string, string>();
@@ -43,10 +66,9 @@ function createEnv(kv: KVNamespace): Env {
   return {
     FREEPIECES_PUBLIC_URL: 'https://freepieces.example.workers.dev',
     TOKEN_STORE: kv,
+    AUTH_STORE: new MemoryKv() as unknown as KVNamespace,
     TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-    ADMIN_USER: 'admin',
-    ADMIN_PASSWORD: 'password',
-    ADMIN_SIGNING_KEY: 'signing-key',
+    ADMIN_EMAILS: 'admin@example.com',
   };
 }
 
@@ -57,39 +79,29 @@ function createExecutionContext(): ExecutionContext {
   } as unknown as ExecutionContext;
 }
 
-async function createAdminCookie(env: Env): Promise<string> {
-  const token = await createSessionToken('admin', env.ADMIN_SIGNING_KEY ?? 'signing-key');
-  return `${COOKIE_NAME}=${token}`;
+function createAdminCookie(): string {
+  return '__fp_admin=valid-admin-token; __fp_admin_refresh=valid-refresh';
 }
 
-describe('admin login', () => {
-  it('returns ok and set-cookie on valid credentials', async () => {
+describe('admin auth', () => {
+  it('returns login URL for email code provider', async () => {
     const env = createEnv(new MemoryKv() as unknown as KVNamespace);
-    const request = new Request('https://freepieces.example.workers.dev/admin/api/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'admin', password: 'password' }),
-    });
+    const request = new Request('https://freepieces.example.workers.dev/admin/api/login-url?provider=code');
 
     const response = await worker.fetch(request, env, createExecutionContext());
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true });
-    expect(response.headers.get('set-cookie')).toContain('__fp_admin=');
+    const body = await response.json() as { url: string };
+    expect(body.url).toBeTruthy();
   });
 
-  it('rejects invalid credentials', async () => {
+  it('rejects unauthenticated access to /admin/api/me', async () => {
     const env = createEnv(new MemoryKv() as unknown as KVNamespace);
-    const request = new Request('https://freepieces.example.workers.dev/admin/api/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'admin', password: 'wrong' }),
-    });
+    const request = new Request('https://freepieces.example.workers.dev/admin/api/me');
 
     const response = await worker.fetch(request, env, createExecutionContext());
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: 'Invalid credentials' });
   });
 });
 
@@ -97,7 +109,7 @@ describe('admin piece users', () => {
   it('marks OAuth-backed pieces as supporting users', async () => {
     const env = createEnv(new MemoryKv() as unknown as KVNamespace);
     const request = new Request('https://freepieces.example.workers.dev/admin/api/pieces', {
-      headers: { cookie: await createAdminCookie(env) },
+      headers: { cookie: createAdminCookie() },
     });
 
     const response = await worker.fetch(request, env, createExecutionContext());
@@ -118,7 +130,7 @@ describe('admin piece users', () => {
     const env = createEnv(kv);
 
     const request = new Request('https://freepieces.example.workers.dev/admin/api/pieces/gmail/users', {
-      headers: { cookie: await createAdminCookie(env) },
+      headers: { cookie: createAdminCookie() },
     });
 
     const response = await worker.fetch(request, env, createExecutionContext());

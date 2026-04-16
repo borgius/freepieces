@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * E2E tests against the Vite dev server (http://localhost:5173) which proxies
- * /admin/api/* to the wrangler dev Worker (http://localhost:8787).
+ * E2E tests against the Vite dev server (http://localhost:5433) which proxies
+ * /admin/api/* to the wrangler dev Worker (http://localhost:9321).
  *
  * Start both before running:
  *   pnpm dev          → wrangler + vite
@@ -16,7 +16,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:5433',
     trace: 'on-first-retry',
   },
   projects: [

@@ -40,9 +40,9 @@
  *   # Triggers only:
  *   npx tsx examples/slack-example.ts --triggers
  *
- *   # Seed OAuth2 access+refresh tokens into KV (OAuth2 with token rotation):
+ *   Seed OAuth2 access+refresh tokens into KV (OAuth2 with token rotation):
  *   SLACK_ACCESS_TOKEN=xoxe-... SLACK_REFRESH_TOKEN=xoxe-r-... \
- *     ADMIN_USER=admin ADMIN_PASSWORD=secret SLACK_USER_ID=alice \
+ *     ADMIN_TOKEN=<openauth-jwt> SLACK_USER_ID=alice \
  *     npx tsx examples/slack-example.ts --seed-tokens
  *   # Then run actions with the stored tokens:
  *   SLACK_USER_ID=alice npx tsx examples/slack-example.ts --actions
@@ -74,8 +74,7 @@
  *     SLACK_ACCESS_TOKEN    xoxe-1-... current access token
  *     SLACK_REFRESH_TOKEN   xoxe-1-... refresh token
  *     SLACK_EXPIRES_IN      seconds until SLACK_ACCESS_TOKEN expires (default: 43200)
- *     ADMIN_USER            admin username (same as wrangler secret ADMIN_USER)
- *     ADMIN_PASSWORD        admin password (same as wrangler secret ADMIN_PASSWORD)
+ *     ADMIN_TOKEN           OpenAuth admin JWT for token seeding
  *
  *     Run --seed-tokens once to store both tokens in KV, then use
  *     --actions / --triggers with SLACK_USER_ID as the lookup key.
@@ -83,7 +82,7 @@
 
 import 'dotenv/config';
 
-const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
+const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
 const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
 // ── Bot token auth (CUSTOM_AUTH) ──────────────────────────────────────────────
 // Never expires. Sent directly as X-Piece-Token when RUN_API_KEY is enabled,
@@ -97,8 +96,7 @@ const BOT_TOKEN = process.env['SLACK_BOT_TOKEN'] ?? '';
 const ACCESS_TOKEN  = process.env['SLACK_ACCESS_TOKEN']  ?? '';
 const REFRESH_TOKEN = process.env['SLACK_REFRESH_TOKEN'] ?? '';
 const EXPIRES_IN    = parseInt(process.env['SLACK_EXPIRES_IN'] ?? '43200', 10);
-const ADMIN_USER    = process.env['ADMIN_USER']     ?? '';
-const ADMIN_PASS    = process.env['ADMIN_PASSWORD'] ?? '';
+const ADMIN_TOKEN   = process.env['ADMIN_TOKEN']    ?? '';
 
 const CHANNEL       = process.env['SLACK_CHANNEL']  ?? 'C0000000000'; // replace with real channel ID
 const USER_ID_SLACK = process.env['SLACK_USER_ID']  ?? 'U0000000000'; // replace with real user ID
@@ -192,8 +190,8 @@ async function seedTokens(): Promise<void> {
     console.error('  Error: SLACK_ACCESS_TOKEN is required for --seed-tokens');
     process.exit(1);
   }
-  if (!ADMIN_USER || !ADMIN_PASS) {
-    console.error('  Error: ADMIN_USER and ADMIN_PASSWORD are required for --seed-tokens');
+  if (!ADMIN_TOKEN) {
+    console.error('  Error: ADMIN_TOKEN (OpenAuth admin JWT) is required for --seed-tokens');
     process.exit(1);
   }
 
@@ -205,8 +203,7 @@ async function seedTokens(): Promise<void> {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      // Basic auth with admin credentials
-      authorization: `Basic ${btoa(`${ADMIN_USER}:${ADMIN_PASS}`)}`,
+      authorization: `Bearer ${ADMIN_TOKEN}`,
     },
     body: JSON.stringify({
       userId: USER_ID_SLACK,

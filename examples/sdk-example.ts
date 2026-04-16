@@ -1,14 +1,19 @@
 /**
  * freepieces SDK — usage examples
  *
- * Run with:
+ * Run with static API key:
  *   FREEPIECES_URL=https://freepieces.example.workers.dev \
  *   RUN_API_KEY=fp_sk_<your-key> \
  *   USER_ID=alice@example.com \
  *   node --import tsx examples/sdk-example.ts
  *
+ * Run with OpenAuth access token:
+ *   FREEPIECES_URL=https://freepieces.example.workers.dev \
+ *   ACCESS_TOKEN=<openauth-jwt> \
+ *   node --import tsx examples/sdk-example.ts
+ *
  * Local dev (no RUN_API_KEY — worker runs without the gating secret):
- *   FREEPIECES_URL=http://localhost:8787 USER_ID=alice npx tsx examples/sdk-example.ts
+ *   FREEPIECES_URL=http://localhost:9321 USER_ID=alice npx tsx examples/sdk-example.ts
  */
 
 import { createClient } from '../src/sdk/index.js';
@@ -17,11 +22,13 @@ import type { GmailMessage, GmailSearchResult } from '../src/sdk/index.js';
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 const client = createClient({
-  baseUrl: process.env['FREEPIECES_URL'] ?? 'http://localhost:8787',
-  // In production: RUN_API_KEY is the shared secret, USER_ID is separate.
-  // In local dev:  only USER_ID is needed (sent as the bearer token).
-  token:  process.env['RUN_API_KEY'],
-  userId: process.env['USER_ID'],
+  baseUrl: process.env['FREEPIECES_URL'] ?? 'http://localhost:9321',
+  // Option 1: Static API key + user ID (M2M)
+  // Option 2: OpenAuth access token (JWT from /oa flow)
+  // Option 3: Local dev — only USER_ID needed as bearer fallback
+  token:       process.env['RUN_API_KEY'],
+  accessToken: process.env['ACCESS_TOKEN'],
+  userId:      process.env['USER_ID'],
 });
 
 async function main(): Promise<void> {

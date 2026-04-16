@@ -22,33 +22,62 @@ export interface Env {
    */
   TOKEN_ENCRYPTION_KEY: string;
 
-  /** Admin UI username. Set via wrangler secret or .env for local dev. */
-  ADMIN_USER?: string;
-  /** Admin UI password. Set via wrangler secret or .env for local dev. */
-  ADMIN_PASSWORD?: string;
+  /** KV namespace for OpenAuth session/token storage. Bind in wrangler.toml. */
+  AUTH_STORE: KVNamespace;
+
+  /**
+   * Comma-separated list of email addresses that are admins.
+   * Users whose email matches get the "admin" subject (full admin panel access).
+   * Store with: wrangler secret put ADMIN_EMAILS
+   */
+  ADMIN_EMAILS?: string;
+
+  /**
+   * Comma-separated list of allowed emails (non-admin users).
+   * Combined with ADMIN_EMAILS for the invite-only gate.
+   * Store with: wrangler secret put ALLOWED_EMAILS
+   */
+  ALLOWED_EMAILS?: string;
+
+  /**
+   * Verified sender email address for Cloudflare Email Workers.
+   * Must be on a domain with Email Routing enabled.
+   * Set in wrangler.toml [vars] or as a secret.
+   */
+  AUTH_SENDER_EMAIL?: string;
+
+  /**
+   * Cloudflare Email Workers send binding for delivering verification codes.
+   * Configured via [[send_email]] in wrangler.toml.
+   */
+  EMAIL?: { send: (msg: unknown) => Promise<void> };
+
+  /** Google OAuth client ID for OpenAuth. Store with: wrangler secret put GOOGLE_CLIENT_ID */
+  GOOGLE_CLIENT_ID?: string;
+  /** Google OAuth client secret for OpenAuth. Store with: wrangler secret put GOOGLE_CLIENT_SECRET */
+  GOOGLE_CLIENT_SECRET?: string;
+  /** GitHub OAuth client ID for OpenAuth. Store with: wrangler secret put GITHUB_CLIENT_ID */
+  GITHUB_CLIENT_ID?: string;
+  /** GitHub OAuth client secret for OpenAuth. Store with: wrangler secret put GITHUB_CLIENT_SECRET */
+  GITHUB_CLIENT_SECRET?: string;
+
   /**
    * Slack app signing secret (found in Slack app → Basic Information → Signing Secret).
    * When set, all requests to POST /webhook/slack are verified via X-Slack-Signature.
    * Store with: wrangler secret put SLACK_SIGNING_SECRET
    */
   SLACK_SIGNING_SECRET?: string;
-  /**
-   * 64-char hex HMAC signing key for admin session tokens.
-   * Generate with:  openssl rand -hex 32
-   * Store with:     wrangler secret put ADMIN_SIGNING_KEY
-   */
-  ADMIN_SIGNING_KEY?: string;
 
   /**
    * Optional shared secret that gates all /run, /trigger, and /subscriptions
    * endpoints. When set, every request to those routes must carry:
    *   Authorization: Bearer <RUN_API_KEY>
-    * and any runtime credentials must be sent separately as:
+   * and any runtime credentials must be sent separately as:
    *   X-User-Id: <userId>
-    *   X-Piece-Token: <token>
+   *   X-Piece-Token: <token>
    *
-    * When absent (e.g. local dev with wrangler dev), the bearer token remains
-    * the fallback for both userId and direct piece-token behaviour.
+   * When absent (e.g. local dev with wrangler dev), the bearer token remains
+   * the fallback for both userId and direct piece-token behaviour.
    *
    * Generate with:  openssl rand -hex 32
    * Store with:     wrangler secret put RUN_API_KEY

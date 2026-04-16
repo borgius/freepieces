@@ -2,34 +2,24 @@ import { useState } from 'react';
 import {
   Box,
   Button,
-  Field,
   Heading,
-  Input,
   Stack,
   Text
 } from '@chakra-ui/react';
-import { login } from '../lib/api';
+import { getLoginUrl } from '../lib/api';
 
-interface Props {
-  onLogin: (username: string) => void;
-}
-
-export function LoginPage({ onLogin }: Props) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleLogin(provider: string) {
     setError('');
     setLoading(true);
     try {
-      await login(username, password);
-      onLogin(username);
+      const { url } = await getLoginUrl(provider);
+      window.location.href = url;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
-    } finally {
+      setError(err instanceof Error ? err.message : 'Failed to start login');
       setLoading(false);
     }
   }
@@ -52,51 +42,43 @@ export function LoginPage({ onLogin }: Props) {
           Admin Console
         </Text>
 
-        <form onSubmit={handleSubmit}>
-          <Stack gap={4}>
-            <Field.Root>
-              <Field.Label>Username</Field.Label>
-              <Input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="admin"
-                autoComplete="username"
-                autoFocus
-                required
-              />
-            </Field.Root>
+        <Stack gap={3}>
+          <Button
+            colorPalette="blue"
+            size="lg"
+            w="full"
+            loading={loading}
+            onClick={() => handleLogin('code')}
+          >
+            Sign in with Email
+          </Button>
 
-            <Field.Root>
-              <Field.Label>Password</Field.Label>
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoComplete="current-password"
-                required
-              />
-            </Field.Root>
+          <Button
+            variant="outline"
+            size="lg"
+            w="full"
+            loading={loading}
+            onClick={() => handleLogin('google')}
+          >
+            Sign in with Google
+          </Button>
 
-            {error && (
-              <Text color="red.500" fontSize="sm">
-                {error}
-              </Text>
-            )}
+          <Button
+            variant="outline"
+            size="lg"
+            w="full"
+            loading={loading}
+            onClick={() => handleLogin('github')}
+          >
+            Sign in with GitHub
+          </Button>
 
-            <Button
-              type="submit"
-              colorPalette="blue"
-              loading={loading}
-              loadingText="Signing in…"
-              size="lg"
-              w="full"
-              mt={2}
-            >
-              Sign in
-            </Button>
-          </Stack>
-        </form>
+          {error && (
+            <Text color="red.500" fontSize="sm" textAlign="center">
+              {error}
+            </Text>
+          )}
+        </Stack>
       </Box>
     </Box>
   );

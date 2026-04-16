@@ -1,0 +1,77 @@
+/**
+ * OpenAuth issuer proxy routes.
+ *
+ * All routes here forward to the OpenAuth issuer app created by
+ * createAuthIssuer().  Using the raw request's own origin ensures the
+ * issuer generates iss/jwks_uri/token_endpoint values that match the
+ * origin the Worker is actually reachable at.  In local dev (with Vite
+ * changeOrigin:true) this is localhost:9321 so internal JWKS fetches
+ * don't cross to the Vite port.
+ *
+ * Mounted at / in the main worker (before /auth and runtime routes).
+ */
+
+import { Hono } from 'hono';
+import { createAuthIssuer } from '../auth/issuer';
+import type { Env } from '../framework/types';
+
+const openauthApi = new Hono<{ Bindings: Env }>();
+
+function toIssuerRequest(rawRequest: Request, path: string): Request {
+  const src = new URL(rawRequest.url);
+  const dest = new URL(path + src.search, src.origin);
+  return new Request(dest.toString(), rawRequest);
+}
+
+// ── OpenAuth SPA (admin login UI) ───────────────────────────────────────
+openauthApi.all('/oa/*', async (c) => {
+  const issuerApp = createAuthIssuer(c.env);
+  const requestOrigin = new URL(c.req.url).origin;
+  // Strip /oa prefix so OpenAuth sees routes at /
+  const path = c.req.path.replace(/^\/oa/, '') || '/';
+  const response = await issuerApp.fetch(toIssuerRequest(c.req.raw, path));
+
+  // Rewrite Location headers to restore the /oa prefix.
+  if ([301, 302, 307, 308].includes(response.status)) {
+    const location = response.headers.get('Location');
+    const relPath = location?.startsWith(requestOrigin)
+      ? location.slice(requestOrigin.length)
+      : location;
+    if (relPath?.startsWith('/') && !relPath.startsWith('/oa') && !relPath.startsWith('/admin')) {
+      const headers = new Headers(response.headers);
+      headers.set('Location', '/oa' + relPath);
+      return new Response(response.body, { status: response.status, headers });
+    }
+  }
+
+  return response;
+});
+
+// ── OpenID Connect discovery & token endpoints ──────────────────────────
+openauthApi.all('/.well-known/*', (c) => {
+  const issuerApp = createAuthIssuer(c.env);
+  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
+});
+
+openauthApi.all('/jwks', (c) => {
+  const issuerApp = createAuthIssuer(c.env);
+  return issuerApp.fetch(toIssuerRequest(c.req.raw, '/jwks'));
+});
+
+openauthApi.all('/token', (c) => {
+  const issuerApp = createAuthIssuer(c.env);
+  return issuerApp.fetch(toIssuerRequest(c.req.raw, '/token'));
+});
+
+// ── OAuth provider callbacks (arrive directly from Google/GitHub) ───────
+openauthApi.all('/:provider/callback', (c) => {
+  const issuerApp = createAuthIssuer(c.env);
+  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
+});
+
+openauthApi.all('/:provider/authorize', (c) => {
+  const issuerApp = createAuthIssuer(c.env);
+  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
+});
+
+export default openauthApi;

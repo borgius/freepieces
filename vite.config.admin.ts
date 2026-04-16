@@ -14,12 +14,20 @@ export default defineConfig({
   root: resolve(__dirname, 'src/admin'),
   base: '/admin/',
   server: {
+    port: 5433,
     fs: {
       allow: [resolve(__dirname)],
     },
     proxy: {
-      '/admin/api': 'http://127.0.0.1:8787',
-      '/auth': 'http://127.0.0.1:8787',
+      '/admin/api': { target: 'http://localhost:9321', changeOrigin: true },
+      '/auth': { target: 'http://localhost:9321', changeOrigin: true },
+      '/oa': { target: 'http://localhost:9321', changeOrigin: true },
+      '/.well-known': { target: 'http://localhost:9321', changeOrigin: true },
+      '/token': { target: 'http://localhost:9321', changeOrigin: true },
+      '/jwks': { target: 'http://localhost:9321', changeOrigin: true },
+      // Provider callback/authorize routes (redirect_uri points to worker origin)
+      '/google': { target: 'http://localhost:9321', changeOrigin: true },
+      '/github': { target: 'http://localhost:9321', changeOrigin: true },
     },
   },
   build: {

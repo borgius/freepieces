@@ -106,18 +106,15 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return data;
 }
 
-export async function login(username: string, password: string): Promise<void> {
-  await apiFetch('/admin/api/login', {
-    method: 'POST',
-    body: JSON.stringify({ username, password })
-  });
+export async function getLoginUrl(provider: string = 'code'): Promise<{ url: string }> {
+  return apiFetch(`/admin/api/login-url?provider=${encodeURIComponent(provider)}`);
 }
 
 export async function logout(): Promise<void> {
   await apiFetch('/admin/api/logout', { method: 'POST' });
 }
 
-export async function getMe(): Promise<{ username: string }> {
+export async function getMe(): Promise<{ email: string }> {
   return apiFetch('/admin/api/me');
 }
 

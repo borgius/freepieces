@@ -39,7 +39,7 @@ describe('FreePiecesClient auth headers', () => {
 
   it('uses pieceToken as the bearer token in local-dev mode', async () => {
     const client = createClient({
-      baseUrl: 'http://localhost:8787',
+      baseUrl: 'http://localhost:9321',
       userId: 'alice@example.com',
       pieceToken: 'raw-piece-token',
       fetch: mockFetch as unknown as typeof fetch,
@@ -58,7 +58,7 @@ describe('FreePiecesClient auth headers', () => {
 
   it('falls back to userId as the bearer token when no shared key or piece token is set', async () => {
     const client = createClient({
-      baseUrl: 'http://localhost:8787',
+      baseUrl: 'http://localhost:9321',
       userId: 'alice@example.com',
       fetch: mockFetch as unknown as typeof fetch,
     });
@@ -69,6 +69,24 @@ describe('FreePiecesClient auth headers', () => {
     expect(init.headers).toEqual({
       'content-type': 'application/json',
       authorization: 'Bearer alice@example.com',
+      'x-user-id': 'alice@example.com',
+    });
+  });
+
+  it('sends accessToken as bearer when provided (OpenAuth JWT mode)', async () => {
+    const client = createClient({
+      baseUrl: 'https://freepieces.example.workers.dev',
+      accessToken: 'eyJhbGciOiJSUzI1NiJ9.test-jwt-payload',
+      userId: 'alice@example.com',
+      fetch: mockFetch as unknown as typeof fetch,
+    });
+
+    await client.run('gmail', 'send_email', { subject: 'Hello' });
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toEqual({
+      'content-type': 'application/json',
+      authorization: 'Bearer eyJhbGciOiJSUzI1NiJ9.test-jwt-payload',
       'x-user-id': 'alice@example.com',
     });
   });

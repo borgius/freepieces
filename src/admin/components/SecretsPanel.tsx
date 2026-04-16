@@ -35,6 +35,19 @@ function StatusBadge({ isSet, required }: { isSet: boolean; required: boolean })
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const IS_LOCAL =
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+/** For `wrangler secret put KEY` commands, derive the .dev.vars equivalent. */
+function devVarsLine(command: string | undefined, key: string): string | null {
+  return command?.startsWith('wrangler secret put ') ? `${key}=<value>` : null;
+}
+
+// ---------------------------------------------------------------------------
 // SecretRow — single secret entry
 // ---------------------------------------------------------------------------
 
@@ -72,30 +85,76 @@ function SecretRow({ secret }: { secret: (SecretDef | GlobalSecretDef) & { isSet
         </Text>
       )}
 
-      <HStack gap={1} mt={1.5} align="center">
-        <Code
-          fontSize="xs"
-          colorPalette={missingRequired ? 'red' : missingOptional ? 'yellow' : 'orange'}
-          variant="surface"
-          px={1.5}
-          py={0.5}
-        >
-          {secret.command}
-        </Code>
-        <ClipboardRoot value={secret.command} timeout={1500}>
-          <ClipboardTrigger asChild>
-            <Box
-              as="button"
-              color="gray.400"
-              _hover={{ color: 'orange.500' }}
-              flexShrink={0}
-              title="Copy command"
-            >
-              <Copy size={12} />
-            </Box>
-          </ClipboardTrigger>
-        </ClipboardRoot>
-      </HStack>
+      {(() => {
+        const localLine = IS_LOCAL ? devVarsLine(secret.command, secret.key) : null;
+        return (
+          <>
+            {localLine ? (
+              <>
+                <HStack gap={1} mt={1.5} align="center">
+                  <Code fontSize="xs" colorPalette="blue" variant="surface" px={1.5} py={0.5}>
+                    {localLine}
+                  </Code>
+                  <Text fontSize="2xs" color="blue.500" fontWeight="medium" flexShrink={0}>
+                    .dev.vars
+                  </Text>
+                  <ClipboardRoot value={localLine} timeout={1500}>
+                    <ClipboardTrigger asChild>
+                      <Box as="button" color="gray.400" _hover={{ color: 'blue.500' }} flexShrink={0} title="Copy">
+                        <Copy size={12} />
+                      </Box>
+                    </ClipboardTrigger>
+                  </ClipboardRoot>
+                </HStack>
+                <HStack gap={1} mt={1} align="center">
+                  <Code
+                    fontSize="xs"
+                    colorPalette={missingRequired ? 'red' : missingOptional ? 'yellow' : 'orange'}
+                    variant="surface"
+                    px={1.5}
+                    py={0.5}
+                  >
+                    {secret.command}
+                  </Code>
+                  <Text fontSize="2xs" color="gray.400" flexShrink={0}>production</Text>
+                  <ClipboardRoot value={secret.command} timeout={1500}>
+                    <ClipboardTrigger asChild>
+                      <Box as="button" color="gray.400" _hover={{ color: 'orange.500' }} flexShrink={0} title="Copy command">
+                        <Copy size={12} />
+                      </Box>
+                    </ClipboardTrigger>
+                  </ClipboardRoot>
+                </HStack>
+              </>
+            ) : (
+              <HStack gap={1} mt={1.5} align="center">
+                <Code
+                  fontSize="xs"
+                  colorPalette={missingRequired ? 'red' : missingOptional ? 'yellow' : 'orange'}
+                  variant="surface"
+                  px={1.5}
+                  py={0.5}
+                >
+                  {secret.command}
+                </Code>
+                <ClipboardRoot value={secret.command} timeout={1500}>
+                  <ClipboardTrigger asChild>
+                    <Box
+                      as="button"
+                      color="gray.400"
+                      _hover={{ color: 'orange.500' }}
+                      flexShrink={0}
+                      title="Copy command"
+                    >
+                      <Copy size={12} />
+                    </Box>
+                  </ClipboardTrigger>
+                </ClipboardRoot>
+              </HStack>
+            )}
+          </>
+        );
+      })()}
     </Box>
   );
 }

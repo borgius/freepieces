@@ -14,6 +14,17 @@ FREEPIECES_PUBLIC_URL = "https://freepieces.modena.workers.dev"
 binding = "TOKEN_STORE"
 id = "da830ef4b53e41d48f25efd8fb980eab"
 
+# KV namespace for OpenAuth session/token storage.
+# AUTH_STORE_ID is read from .env (gitignored).
+[[kv_namespaces]]
+binding = "AUTH_STORE"
+id = "placeholder-replace-with-real-id"
+
+# Cloudflare Email Workers – send verification codes.
+# Requires Email Routing enabled on the domain.
+[[send_email]]
+name = "EMAIL"
+
 # Static assets – the compiled admin React SPA.
 # Build with: npm run build:admin
 [assets]
@@ -32,9 +43,17 @@ binding = "ASSETS"
 #   wrangler secret put EXAMPLE_OAUTH_CLIENT_SECRET
 #
 # Admin UI credentials (set in .env for local dev, secrets for production):
-#   wrangler secret put ADMIN_USER
-#   wrangler secret put ADMIN_PASSWORD
-#   wrangler secret put ADMIN_SIGNING_KEY      # 32 random hex bytes → openssl rand -hex 32
+#   wrangler secret put ADMIN_EMAILS            # comma-separated admin email list
+#   wrangler secret put ALLOWED_EMAILS          # comma-separated allowed (non-admin) email list
+#
+# OpenAuth provider credentials (optional — social logins enabled when set):
+#   wrangler secret put GOOGLE_CLIENT_ID
+#   wrangler secret put GOOGLE_CLIENT_SECRET
+#   wrangler secret put GITHUB_CLIENT_ID
+#   wrangler secret put GITHUB_CLIENT_SECRET
+#
+# Verification email sender address (set in [vars] or as secret):
+#   AUTH_SENDER_EMAIL = "noreply@yourdomain.com"
 #
 # Runtime API key (recommended):
 #   wrangler secret put RUN_API_KEY            # prefix with fp_sk_, e.g. fp_sk_<hex32>

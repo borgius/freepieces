@@ -34,9 +34,15 @@ fi
 PUBLIC_URL="${FREEPIECES_PUBLIC_URL:?FREEPIECES_PUBLIC_URL not set in .env}"
 KV_BINDING="TOKEN_STORE"
 KV_NAMESPACE_ID="${TOKEN_STORE_ID:?TOKEN_STORE_ID not set in .env}"
+AUTH_KV_BINDING="AUTH_STORE"
+AUTH_KV_NAMESPACE_ID="${AUTH_STORE_ID:?AUTH_STORE_ID not set in .env}"
 
 if [[ ! "$KV_NAMESPACE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
   die "TOKEN_STORE_ID in .env must be a real 32-character KV namespace ID. Current value: $KV_NAMESPACE_ID"
+fi
+
+if [[ ! "$AUTH_KV_NAMESPACE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+  die "AUTH_STORE_ID in .env must be a real 32-character KV namespace ID. Current value: $AUTH_KV_NAMESPACE_ID"
 fi
 
 if [[ ! "$PUBLIC_URL" =~ ^https?:// ]]; then
@@ -108,27 +114,48 @@ if [[ "$DRY_RUN" != "true" ]]; then
     echo "    ⚠️  Existing encrypted tokens in KV will be unreadable after key rotation."
   fi
 
-  # ── Ensure admin secrets are configured ─────────────────────────────────────
-  if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" && -n "${ADMIN_SIGNING_KEY:-}" ]]; then
-    echo "==> Setting admin credentials from .env..."
-    echo "$ADMIN_USER"     | wrangler secret put ADMIN_USER
-    echo "$ADMIN_PASSWORD" | wrangler secret put ADMIN_PASSWORD
-    echo "$ADMIN_SIGNING_KEY" | wrangler secret put ADMIN_SIGNING_KEY
-    echo "    Admin secrets set."
+  # ── Ensure admin & auth secrets are configured ───────────────────────────
+  if [[ -n "${ADMIN_EMAILS:-}" ]]; then
+    echo "==> Setting ADMIN_EMAILS from .env..."
+    echo "$ADMIN_EMAILS" | wrangler secret put ADMIN_EMAILS
+    echo "    ADMIN_EMAILS set."
   else
-    echo "⚠️  ADMIN_USER, ADMIN_PASSWORD, or ADMIN_SIGNING_KEY not set in .env"
-    echo "    Set them and re-run, or use: wrangler secret put ADMIN_USER / ADMIN_PASSWORD / ADMIN_SIGNING_KEY"
+    echo "⚠️  ADMIN_EMAILS not set in .env"
+    echo "    Set it (comma-separated emails) and re-run, or use: wrangler secret put ADMIN_EMAILS"
   fi
 
-  # ── Ensure KV namespace exists ───────────────────────────────────────────────
-  echo "==> Verifying KV namespace $KV_NAMESPACE_ID exists..."
+  if [[ -n "${ALLOWED_EMAILS:-}" ]]; then
+    echo "==> Setting ALLOWED_EMAILS from .env..."
+    echo "$ALLOWED_EMAILS" | wrangler secret put ALLOWED_EMAILS
+    echo "    ALLOWED_EMAILS set."
+  fi
+
+  # ── Optional: OpenAuth social login provider credentials ────────────────
+  for var in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
+    if [[ -n "${!var:-}" ]]; then
+      echo "==> Setting $var from .env..."
+      echo "${!var}" | wrangler secret put "$var"
+    fi
+  done
+
+  # ── Ensure KV namespaces exist ─────────────────────────────────────────
+  echo "==> Verifying KV namespace $KV_NAMESPACE_ID (TOKEN_STORE) exists..."
   if ! wrangler kv namespace list 2>/dev/null | grep -q "$KV_NAMESPACE_ID"; then
     echo "    KV namespace $KV_NAMESPACE_ID not found – creating..."
     wrangler kv namespace create "$KV_BINDING"
     echo "    Update TOKEN_STORE_ID in .env with the new namespace ID, then re-run npm run deploy."
     exit 1
   fi
-  echo "    KV namespace OK."
+  echo "    TOKEN_STORE KV namespace OK."
+
+  echo "==> Verifying KV namespace $AUTH_KV_NAMESPACE_ID (AUTH_STORE) exists..."
+  if ! wrangler kv namespace list 2>/dev/null | grep -q "$AUTH_KV_NAMESPACE_ID"; then
+    echo "    KV namespace $AUTH_KV_NAMESPACE_ID not found – creating..."
+    wrangler kv namespace create "$AUTH_KV_BINDING"
+    echo "    Update AUTH_STORE_ID in .env with the new namespace ID, then re-run npm run deploy."
+    exit 1
+  fi
+  echo "    AUTH_STORE KV namespace OK."
 else
   echo "==> Dry run mode: skipping Wrangler auth, secret updates, KV checks, and deploy."
 fi
@@ -156,6 +183,11 @@ echo "    Worker URL : $PUBLIC_URL"
 echo "    Health     : $PUBLIC_URL/health"
 echo "    Pieces     : $PUBLIC_URL/pieces"
 echo "    Admin UI   : $PUBLIC_URL/admin/"
+echo "    Auth       : $PUBLIC_URL/oa"
 echo ""
-echo "To update piece OAuth credentials run: wrangler secret put <PIECE>_CLIENT_ID and wrangler secret put <PIECE>_CLIENT_SECRET"
-echo "To rotate the encryption key run: ./scripts/deploy.sh --rotate-key"
+echo "To update admin emails:        wrangler secret put ADMIN_EMAILS"
+echo "To add allowed users:          wrangler secret put ALLOWED_EMAILS"
+echo "To add Google social login:    wrangler secret put GOOGLE_CLIENT_ID && wrangler secret put GOOGLE_CLIENT_SECRET"
+echo "To add GitHub social login:    wrangler secret put GITHUB_CLIENT_ID && wrangler secret put GITHUB_CLIENT_SECRET"
+echo "To update piece OAuth creds:   wrangler secret put <PIECE>_CLIENT_ID && wrangler secret put <PIECE>_CLIENT_SECRET"
+echo "To rotate the encryption key:  ./scripts/deploy.sh --rotate-key"

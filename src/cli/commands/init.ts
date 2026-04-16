@@ -2,7 +2,6 @@ import {
   intro,
   outro,
   text,
-  password,
   confirm,
   spinner as clackSpinner,
   log,
@@ -63,7 +62,7 @@ function makePackageJson(name: string): string {
   );
 }
 
-function makeWranglerToml(workerName: string, kvId: string, publicUrl: string): string {
+function makeWranglerToml(workerName: string, kvId: string, authKvId: string, publicUrl: string): string {
   return `name = "${workerName}"
 main = "src/worker.ts"
 compatibility_date = "2026-04-14"
@@ -75,6 +74,15 @@ FREEPIECES_PUBLIC_URL = "${publicUrl}"
 [[kv_namespaces]]
 binding = "TOKEN_STORE"
 id = "${kvId}"
+
+[[kv_namespaces]]
+binding = "AUTH_STORE"
+id = "${authKvId}"
+
+# Cloudflare Email Workers – send verification codes.
+# Requires Email Routing enabled on the domain.
+[[send_email]]
+name = "EMAIL"
 
 [assets]
 directory = "./dist/public"
@@ -115,20 +123,18 @@ dist/
 function makeEnvFile(
   publicUrl: string,
   kvId: string,
-  adminUser: string,
-  adminPass: string,
+  authKvId: string,
+  adminEmails: string,
   runApiKey: string,
   tokenKey: string,
-  signingKey: string,
 ): string {
   return [
     `FREEPIECES_PUBLIC_URL=${publicUrl}`,
     `TOKEN_STORE_ID=${kvId}`,
+    `AUTH_STORE_ID=${authKvId}`,
     `RUN_API_KEY=${runApiKey}`,
-    `ADMIN_USER=${adminUser}`,
-    `ADMIN_PASSWORD=${adminPass}`,
+    `ADMIN_EMAILS=${adminEmails}`,
     `TOKEN_ENCRYPTION_KEY=${tokenKey}`,
-    `ADMIN_SIGNING_KEY=${signingKey}`,
   ].join('\n') + '\n';
 }
 
@@ -216,12 +222,12 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
     }
   }
 
-  // 5. KV namespace
+  // 5. KV namespaces
   s.start('Creating KV namespace TOKEN_STORE…');
   let kvId = '';
   try {
     kvId = await createKVNamespace('TOKEN_STORE', projectPath);
-    s.stop(`KV namespace created: ${kvId}`);
+    s.stop(`TOKEN_STORE created: ${kvId}`);
   } catch {
     s.stop('Auto-creation failed');
     const kvAnswer = await text({
@@ -239,6 +245,28 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
     kvId = (kvAnswer as string).trim();
   }
 
+  s.start('Creating KV namespace AUTH_STORE…');
+  let authKvId = '';
+  try {
+    authKvId = await createKVNamespace('AUTH_STORE', projectPath);
+    s.stop(`AUTH_STORE created: ${authKvId}`);
+  } catch {
+    s.stop('Auto-creation failed');
+    const authKvAnswer = await text({
+      message:
+        'Enter KV namespace ID manually\n  (run: npx wrangler kv namespace create AUTH_STORE)',
+      placeholder: '32-char hex id',
+      validate(v) {
+        if (!v || !/^[a-f0-9]{32}$/.test(v.trim())) return 'Expected 32 lowercase hex characters';
+      },
+    });
+    if (isCancel(authKvAnswer)) {
+      cancel('Init cancelled');
+      process.exit(0);
+    }
+    authKvId = (authKvAnswer as string).trim();
+  }
+
   // 6. Public URL
   const defaultUrl = `https://${workerName}.workers.dev`;
   const urlAnswer = await text({
@@ -252,41 +280,35 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
   }
   const publicUrl = ((urlAnswer as string).trim() || defaultUrl);
 
-  // 7. Admin credentials
-  const adminUserAnswer = await text({
-    message: 'Admin UI username:',
-    placeholder: 'admin',
-    defaultValue: 'admin',
-  });
-  if (isCancel(adminUserAnswer)) {
-    cancel('Init cancelled');
-    process.exit(0);
-  }
-
-  const adminPassAnswer = await password({
-    message: 'Admin UI password (min 8 chars):',
+  // 7. Admin emails (invite-only)
+  const adminEmailsAnswer = await text({
+    message: 'Admin email addresses (comma-separated):',
+    placeholder: 'admin@example.com',
     validate(v) {
-      if ((v?.length ?? 0) < 8) return 'Minimum 8 characters';
+      if (!v?.trim()) return 'At least one admin email is required';
+      const emails = v.split(',').map((e) => e.trim()).filter(Boolean);
+      if (emails.length === 0) return 'At least one admin email is required';
+      for (const email of emails) {
+        if (!email.includes('@')) return `Invalid email: ${email}`;
+      }
     },
   });
-  if (isCancel(adminPassAnswer)) {
+  if (isCancel(adminEmailsAnswer)) {
     cancel('Init cancelled');
     process.exit(0);
   }
 
-  const adminUser = (adminUserAnswer as string).trim() || 'admin';
-  const adminPass = adminPassAnswer as string;
+  const adminEmails = (adminEmailsAnswer as string).trim();
 
   // 8. Generate secure keys
   const runApiKey = `fp_sk_${generateHexSync(32)}`;
   const tokenKey = generateHexSync(32);
-  const signingKey = generateHexSync(32);
 
   // 9. Write wrangler.toml and package.json
   s.start('Writing wrangler.toml…');
   await writeFile(
     join(projectPath, 'wrangler.toml'),
-    makeWranglerToml(workerName, kvId, publicUrl),
+    makeWranglerToml(workerName, kvId, authKvId, publicUrl),
     'utf-8',
   );
   if (!isExisting) {
@@ -301,7 +323,7 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
   // 10. Write .env for local dev
   await writeFile(
     join(projectPath, '.env'),
-    makeEnvFile(publicUrl, kvId, adminUser, adminPass, runApiKey, tokenKey, signingKey),
+    makeEnvFile(publicUrl, kvId, authKvId, adminEmails, runApiKey, tokenKey),
     'utf-8',
   );
   log.success('.env written (keep this secret, it is gitignored)');
@@ -311,10 +333,8 @@ export async function initCommand(opts: { name?: string } = {}): Promise<void> {
   const secretErrors: string[] = [];
   for (const [name, value] of [
     ['RUN_API_KEY', runApiKey],
-    ['ADMIN_USER', adminUser],
-    ['ADMIN_PASSWORD', adminPass],
+    ['ADMIN_EMAILS', adminEmails],
     ['TOKEN_ENCRYPTION_KEY', tokenKey],
-    ['ADMIN_SIGNING_KEY', signingKey],
   ] as [string, string][]) {
     try {
       setWranglerSecret(name, value, projectPath);

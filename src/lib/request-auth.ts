@@ -1,4 +1,5 @@
 import { timingSafeEqual } from './admin-session';
+import { createAuthClient, subjects } from '../auth/client';
 
 export interface RuntimeRequestCredentials {
   userId?: string;
@@ -38,31 +39,35 @@ function parsePieceAuthHeader(value: string | null): Record<string, string> | un
 /**
  * Resolve caller auth for runtime endpoints (/run, /trigger, /subscriptions).
  *
- * Modes:
- * - Secured mode (`RUN_API_KEY` set):
- *   - Authorization: Bearer <RUN_API_KEY>   ← authenticates the caller
- *   - X-User-Id: <userId>                   ← KV lookup key for stored OAuth2 tokens
- *   - X-Piece-Token: <token>                ← direct runtime credential (single-prop CUSTOM_AUTH)
- *   - X-Piece-Auth: {"prop":"val",…}        ← direct runtime credentials (multi-prop CUSTOM_AUTH)
+ * Modes (in priority order):
  *
- * - Local-dev / legacy mode (`RUN_API_KEY` absent):
- *   - Authorization: Bearer <token-or-userId>
- *   - Optional X-User-Id / X-Piece-Token / X-Piece-Auth may still override the bearer fallback
+ * 1. Static API key (`RUN_API_KEY` set, bearer matches `fp_sk_*` pattern):
+ *    - Authorization: Bearer <RUN_API_KEY>   ← authenticates the caller
+ *    - X-User-Id: <userId>                   ← KV lookup key for stored OAuth2 tokens
+ *    - X-Piece-Token: <token>                ← direct runtime credential (single-prop CUSTOM_AUTH)
+ *    - X-Piece-Auth: {"prop":"val",…}        ← direct runtime credentials (multi-prop CUSTOM_AUTH)
+ *
+ * 2. OpenAuth JWT (bearer is a JWT, `publicUrl` provided):
+ *    - Authorization: Bearer <access_token>  ← verified against OpenAuth issuer
+ *    - userId resolved from JWT subject      ← can be overridden by X-User-Id
+ *    - X-Piece-Token / X-Piece-Auth          ← optional as in mode 1
+ *
+ * 3. Local-dev / legacy mode (`RUN_API_KEY` absent, no valid JWT):
+ *    - Authorization: Bearer <token-or-userId>
+ *    - Optional X-User-Id / X-Piece-Token / X-Piece-Auth may still override the bearer fallback
  */
-export function resolveRuntimeRequestAuth(
+export async function resolveRuntimeRequestAuth(
   headers: Headers,
   runApiKey?: string,
-): RuntimeRequestAuthResult {
+  publicUrl?: string,
+): Promise<RuntimeRequestAuthResult> {
   const authHeader = headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ')
     ? authHeader.slice(7)
     : undefined;
 
-  if (runApiKey) {
-    if (!bearerToken || !timingSafeEqual(bearerToken, runApiKey)) {
-      return { ok: false, status: 401, error: 'Unauthorized' };
-    }
-
+  // Mode 1: Static API key
+  if (runApiKey && bearerToken && timingSafeEqual(bearerToken, runApiKey)) {
     return {
       ok: true,
       credentials: {
@@ -73,6 +78,33 @@ export function resolveRuntimeRequestAuth(
     };
   }
 
+  // Mode 2: OpenAuth JWT verification
+  if (bearerToken && publicUrl) {
+    try {
+      const client = createAuthClient(publicUrl);
+      const verified = await client.verify(subjects, bearerToken);
+      if (!verified.err) {
+        const jwtUserId = verified.subject.properties.userId ?? verified.subject.properties.email;
+        return {
+          ok: true,
+          credentials: {
+            userId: headers.get('x-user-id') ?? jwtUserId ?? undefined,
+            pieceToken: headers.get('x-piece-token') ?? undefined,
+            pieceAuthProps: parsePieceAuthHeader(headers.get('x-piece-auth')),
+          },
+        };
+      }
+    } catch {
+      // JWT verification failed — fall through to mode 3
+    }
+  }
+
+  // Require authentication when RUN_API_KEY is configured
+  if (runApiKey) {
+    return { ok: false, status: 401, error: 'Unauthorized' };
+  }
+
+  // Mode 3: Local-dev / legacy mode
   return {
     ok: true,
     credentials: {

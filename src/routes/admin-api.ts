@@ -2,14 +2,14 @@
  * Admin API route handlers for the freepieces admin panel.
  *
  * Mounted at /admin/api in the main worker. All routes here are
- * protected by the admin session middleware.
+ * protected by the admin session middleware (OpenAuth JWT verification).
  */
 
 import { Hono } from 'hono';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
-import { COOKIE_NAME, createSessionToken, verifySessionToken, timingSafeEqual } from '../lib/admin-session';
+import { createAuthClient, subjects } from '../auth/client';
 import {
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
@@ -21,63 +21,126 @@ import {
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
 
+const COOKIE_NAME = '__fp_admin';
+const REFRESH_COOKIE = '__fp_admin_refresh';
+
 const adminApi = new Hono<{
   Bindings: Env;
-  Variables: { session: { sub: string } };
+  Variables: { session: { sub: string; email: string } };
 }>();
 
-// ── Unauthenticated routes (before session middleware) ───────────────────
+// ── Auth callback — exchanges OpenAuth code for tokens ──────────────────
 
-adminApi.post('/login', async (c) => {
-  if (!c.env.ADMIN_USER || !c.env.ADMIN_PASSWORD || !c.env.ADMIN_SIGNING_KEY) {
-    return c.json({ error: 'Admin credentials not configured' }, 503);
+adminApi.get('/callback', async (c) => {
+  const code = c.req.query('code');
+  if (!code) return c.json({ error: 'Missing code parameter' }, 400);
+
+  const redirectUri = `${c.env.FREEPIECES_PUBLIC_URL}/admin/api/callback`;
+  const client = createAuthClient(new URL(c.req.url).origin);
+  const exchanged = await client.exchange(code, redirectUri);
+  if (exchanged.err) {
+    return c.json({ error: 'Token exchange failed' }, 401);
   }
-  let body: { username?: string; password?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'Invalid JSON body' }, 400);
+
+  // Verify this is an admin token
+  const verified = await client.verify(subjects, exchanged.tokens.access, {
+    refresh: exchanged.tokens.refresh,
+  });
+  if (verified.err) {
+    return c.json({ error: 'Token verification failed' }, 401);
   }
-  const { username = '', password = '' } = body;
-  const validUser = timingSafeEqual(username, c.env.ADMIN_USER);
-  const validPass = timingSafeEqual(password, c.env.ADMIN_PASSWORD);
-  if (!validUser || !validPass) {
-    return c.json({ error: 'Invalid credentials' }, 401);
+  if (verified.subject.type !== 'admin') {
+    return c.json({ error: 'Insufficient permissions. Admin access required.' }, 403);
   }
-  const token = await createSessionToken(username, c.env.ADMIN_SIGNING_KEY);
-  setCookie(c, COOKIE_NAME, token, {
+
+  const secure = c.req.url.startsWith('https://');
+  setCookie(c, COOKIE_NAME, exchanged.tokens.access, {
     httpOnly: true,
-    secure: c.req.url.startsWith('https://'),
-    sameSite: 'Strict',
+    secure,
+    sameSite: 'Lax',
     path: '/admin',
     maxAge: 86400,
   });
-  return c.json({ ok: true });
+  setCookie(c, REFRESH_COOKIE, exchanged.tokens.refresh, {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/admin',
+    maxAge: 7 * 86400,
+  });
+
+  return c.redirect('/admin/');
 });
 
 adminApi.post('/logout', (c) => {
   deleteCookie(c, COOKIE_NAME, { path: '/admin' });
+  deleteCookie(c, REFRESH_COOKIE, { path: '/admin' });
   return c.json({ ok: true });
 });
 
 // ── Session middleware — protects all routes below ───────────────────────
 adminApi.use('*', async (c, next) => {
-  // Login and logout are unauthenticated — skip session check
-  if (c.req.path.endsWith('/login') || c.req.path.endsWith('/logout')) {
+  // Callback, logout, and login-url are unauthenticated
+  if (c.req.path.endsWith('/callback') || c.req.path.endsWith('/logout') || c.req.path.endsWith('/login-url')) {
     return next();
   }
-  if (!c.env.ADMIN_SIGNING_KEY) return c.json({ error: 'Unauthorized' }, 401);
-  const token = getCookie(c, COOKIE_NAME);
-  if (!token) return c.json({ error: 'Unauthorized' }, 401);
-  const session = await verifySessionToken(token, c.env.ADMIN_SIGNING_KEY);
-  if (!session) return c.json({ error: 'Unauthorized' }, 401);
-  c.set('session', session);
+
+  const accessToken = getCookie(c, COOKIE_NAME);
+  const refreshToken = getCookie(c, REFRESH_COOKIE);
+  if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
+
+  const client = createAuthClient(new URL(c.req.url).origin);
+  const verified = await client.verify(subjects, accessToken, {
+    refresh: refreshToken,
+  });
+  if (verified.err) return c.json({ error: 'Unauthorized' }, 401);
+
+  if (verified.subject.type !== 'admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  // If tokens were refreshed, update cookies
+  if (verified.tokens) {
+    const secure = c.req.url.startsWith('https://');
+    setCookie(c, COOKIE_NAME, verified.tokens.access, {
+      httpOnly: true,
+      secure,
+      sameSite: 'Lax',
+      path: '/admin',
+      maxAge: 86400,
+    });
+    setCookie(c, REFRESH_COOKIE, verified.tokens.refresh, {
+      httpOnly: true,
+      secure,
+      sameSite: 'Lax',
+      path: '/admin',
+      maxAge: 7 * 86400,
+    });
+  }
+
+  c.set('session', {
+    sub: verified.subject.properties.userId,
+    email: verified.subject.properties.email,
+  });
   await next();
 });
 
 // GET /admin/api/me
 adminApi.get('/me', (c) => {
-  return c.json({ username: c.var.session.sub });
+  return c.json({ email: c.var.session.email });
+});
+
+// GET /admin/api/login-url — returns the OpenAuth authorization URL
+adminApi.get('/login-url', (c) => {
+  const redirectUri = `${c.env.FREEPIECES_PUBLIC_URL}/admin/api/callback`;
+  const provider = c.req.query('provider') ?? 'code';
+  const issuerUrl = `${c.env.FREEPIECES_PUBLIC_URL}/oa`;
+  const authorizationUrl = new URL(`${issuerUrl}/authorize`);
+  authorizationUrl.searchParams.set('client_id', 'freepieces-worker');
+  authorizationUrl.searchParams.set('redirect_uri', redirectUri);
+  authorizationUrl.searchParams.set('response_type', 'code');
+  authorizationUrl.searchParams.set('provider', provider);
+  return c.json({ url: authorizationUrl.toString() });
 });
 
 // GET /admin/api/pieces

@@ -14,13 +14,13 @@
  *
  * Environment variables
  * ─────────────────────
- *   FREEPIECES_URL         Base URL of the deployed worker (default: http://localhost:8787)
+ *   FREEPIECES_URL         Base URL of the deployed worker (default: http://localhost:9321)
  *   RUN_API_KEY            Shared worker API key (Authorization header in secured mode)
  *   FREEPIECES_USER_ID     OAuth2 KV lookup key / logical user identity
  *   FREEPIECES_PIECE_TOKEN Direct runtime piece credential for API-key/CUSTOM_AUTH pieces
  */
 
-const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
+const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
 const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
 const USER_ID = process.env['FREEPIECES_USER_ID'] ?? process.env['USER_ID'] ?? '';
 const PIECE_TOKEN = process.env['FREEPIECES_PIECE_TOKEN'] ?? '';

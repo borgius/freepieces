@@ -1,10 +1,9 @@
 import type { DocEntry, DocMeta, DocModule, DocSection } from './types';
 
-const docLoaders = import.meta.glob('../../../docs/*.mdx') as Record<string, () => Promise<DocModule>>;
-const docMetas = import.meta.glob('../../../docs/*.mdx', {
-  eager: true,
-  import: 'meta',
-}) as Record<string, DocMeta>;
+const docModules = import.meta.glob('../../../docs/*.mdx', { eager: true }) as Record<
+  string,
+  DocModule & { meta: DocMeta }
+>;
 
 export const DOC_SECTIONS: DocSection[] = [
   {
@@ -24,12 +23,12 @@ export const DOC_SECTIONS: DocSection[] = [
   },
 ];
 
-export const DOCS: DocEntry[] = Object.entries(docMetas)
-  .map(([path, meta]) => ({
-    meta,
-    load: docLoaders[path],
+export const DOCS: DocEntry[] = Object.entries(docModules)
+  .filter(([, mod]) => mod?.meta != null)
+  .map(([, mod]) => ({
+    meta: mod.meta,
+    load: () => Promise.resolve(mod),
   }))
-  .filter((doc): doc is DocEntry => typeof doc.load === 'function')
   .sort((left, right) => left.meta.order - right.meta.order);
 
 const docsBySlug = new Map(DOCS.map((doc) => [doc.meta.slug, doc]));

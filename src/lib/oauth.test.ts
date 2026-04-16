@@ -16,6 +16,7 @@ function makeEnv(overrides: Record<string, unknown> = {}): Env {
   return {
     FREEPIECES_PUBLIC_URL: 'https://freepieces.test',
     TOKEN_STORE: {} as KVNamespace,
+    AUTH_STORE: {} as KVNamespace,
     TOKEN_ENCRYPTION_KEY: 'a'.repeat(64),
     TEST_CLIENT_ID: 'test-client-id',
     TEST_CLIENT_SECRET: 'test-client-secret',

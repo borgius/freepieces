@@ -18,7 +18,7 @@ export default defineConfig({
       fileName: () => 'worker.js'
     },
     rollupOptions: {
-      external: nodeBuiltins,
+      external: [...nodeBuiltins, /^cloudflare:/],
     },
     minify: false,
     outDir: 'dist'

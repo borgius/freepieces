@@ -79,6 +79,7 @@ export interface FreePiecesClient extends KnownPieces {}
 export class FreePiecesClient {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
+  private readonly accessToken: string | undefined;
   private readonly userId: string | undefined;
   private readonly pieceToken: string | undefined;
   private readonly fetchFn: typeof globalThis.fetch;
@@ -87,6 +88,7 @@ export class FreePiecesClient {
     const url = options.baseUrl.replace(/\/$/, '');
     this.baseUrl  = url;
     this.token    = options.token;
+    this.accessToken = options.accessToken;
     this.userId   = options.userId;
     this.pieceToken = options.pieceToken;
     this.fetchFn  = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -102,19 +104,13 @@ export class FreePiecesClient {
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = { 'content-type': 'application/json' };
-    if (this.token) {
-      // Production: token is the shared RUN_API_KEY; userId goes in X-User-Id.
-      h['authorization'] = `Bearer ${this.token}`;
-      if (this.userId) h['x-user-id'] = this.userId;
-      if (this.pieceToken) h['x-piece-token'] = this.pieceToken;
-    } else {
-      // Local dev / no API key: use the direct piece token when available,
-      // otherwise fall back to userId for OAuth2 KV lookup compatibility.
-      const bearerFallback = this.pieceToken ?? this.userId;
-      if (bearerFallback) h['authorization'] = `Bearer ${bearerFallback}`;
-      if (this.userId) h['x-user-id'] = this.userId;
-      if (this.pieceToken) h['x-piece-token'] = this.pieceToken;
-    }
+
+    // Bearer precedence: OpenAuth JWT > static API key > pieceToken > userId
+    const bearer = this.accessToken ?? this.token ?? this.pieceToken ?? this.userId;
+    if (bearer) h['authorization'] = `Bearer ${bearer}`;
+    if (this.userId) h['x-user-id'] = this.userId;
+    if (this.pieceToken) h['x-piece-token'] = this.pieceToken;
+
     return h;
   }
 

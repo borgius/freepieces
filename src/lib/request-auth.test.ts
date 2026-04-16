@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveRuntimeRequestAuth } from './request-auth';
 
 describe('resolveRuntimeRequestAuth', () => {
-  it('uses the bearer token as both fallbacks in local-dev mode', () => {
-    const result = resolveRuntimeRequestAuth(
+  it('uses the bearer token as both fallbacks in local-dev mode', async () => {
+    const result = await resolveRuntimeRequestAuth(
       new Headers({ authorization: 'Bearer local-token-or-user-id' }),
     );
 
@@ -16,8 +16,8 @@ describe('resolveRuntimeRequestAuth', () => {
     });
   });
 
-  it('prefers explicit X-User-Id and X-Piece-Token headers in local-dev mode', () => {
-    const result = resolveRuntimeRequestAuth(
+  it('prefers explicit X-User-Id and X-Piece-Token headers in local-dev mode', async () => {
+    const result = await resolveRuntimeRequestAuth(
       new Headers({
         authorization: 'Bearer ignored-fallback',
         'x-user-id': 'alice@example.com',
@@ -34,8 +34,8 @@ describe('resolveRuntimeRequestAuth', () => {
     });
   });
 
-  it('rejects secured requests when the bearer token does not match RUN_API_KEY', () => {
-    const result = resolveRuntimeRequestAuth(
+  it('rejects secured requests when the bearer token does not match RUN_API_KEY', async () => {
+    const result = await resolveRuntimeRequestAuth(
       new Headers({ authorization: 'Bearer wrong-key' }),
       'fp_sk_expected',
     );
@@ -43,8 +43,8 @@ describe('resolveRuntimeRequestAuth', () => {
     expect(result).toEqual({ ok: false, status: 401, error: 'Unauthorized' });
   });
 
-  it('accepts secured requests and separates caller auth from runtime credentials', () => {
-    const result = resolveRuntimeRequestAuth(
+  it('accepts secured requests and separates caller auth from runtime credentials', async () => {
+    const result = await resolveRuntimeRequestAuth(
       new Headers({
         authorization: 'Bearer fp_sk_expected',
         'x-user-id': 'alice@example.com',
@@ -63,8 +63,8 @@ describe('resolveRuntimeRequestAuth', () => {
   });
 
   describe('X-Piece-Auth', () => {
-    it('parses a valid JSON object into pieceAuthProps in local-dev mode', () => {
-      const result = resolveRuntimeRequestAuth(
+    it('parses a valid JSON object into pieceAuthProps in local-dev mode', async () => {
+      const result = await resolveRuntimeRequestAuth(
         new Headers({
           authorization: 'Bearer fp_sk_local',
           'x-piece-auth': JSON.stringify({ botToken: 'xoxb-one', botToken2: 'xoxb-two' }),
@@ -81,8 +81,8 @@ describe('resolveRuntimeRequestAuth', () => {
       });
     });
 
-    it('parses X-Piece-Auth in secured mode and includes it in credentials', () => {
-      const result = resolveRuntimeRequestAuth(
+    it('parses X-Piece-Auth in secured mode and includes it in credentials', async () => {
+      const result = await resolveRuntimeRequestAuth(
         new Headers({
           authorization: 'Bearer fp_sk_expected',
           'x-user-id': 'user-123',
@@ -100,8 +100,8 @@ describe('resolveRuntimeRequestAuth', () => {
       });
     });
 
-    it('silently ignores malformed JSON in X-Piece-Auth', () => {
-      const result = resolveRuntimeRequestAuth(
+    it('silently ignores malformed JSON in X-Piece-Auth', async () => {
+      const result = await resolveRuntimeRequestAuth(
         new Headers({
           authorization: 'Bearer fp_sk_expected',
           'x-piece-auth': 'not-valid-json',
@@ -115,8 +115,8 @@ describe('resolveRuntimeRequestAuth', () => {
       });
     });
 
-    it('silently drops non-string values in X-Piece-Auth', () => {
-      const result = resolveRuntimeRequestAuth(
+    it('silently drops non-string values in X-Piece-Auth', async () => {
+      const result = await resolveRuntimeRequestAuth(
         new Headers({
           authorization: 'Bearer fp_sk_expected',
           'x-piece-auth': JSON.stringify({ good: 'value', bad: 42, alsoGood: 'ok' }),
@@ -132,8 +132,8 @@ describe('resolveRuntimeRequestAuth', () => {
       });
     });
 
-    it('ignores X-Piece-Auth when the object is empty after filtering', () => {
-      const result = resolveRuntimeRequestAuth(
+    it('ignores X-Piece-Auth when the object is empty after filtering', async () => {
+      const result = await resolveRuntimeRequestAuth(
         new Headers({
           authorization: 'Bearer fp_sk_expected',
           'x-piece-auth': JSON.stringify({ num: 1, arr: [] }),

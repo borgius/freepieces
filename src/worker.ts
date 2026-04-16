@@ -7,6 +7,7 @@ import { listPieces, getPiece } from './framework/registry';
 import { dispatchWebhook } from './lib/webhook';
 import adminApi from './routes/admin-api';
 import authApi from './routes/auth-api';
+import openauthApi from './routes/openauth-api';
 import runtimeApi from './routes/runtime-api';
 import webhookApi from './routes/webhook-api';
 import './pieces/index.js';
@@ -55,10 +56,12 @@ app.get('/pieces', (c) =>
 );
 
 // ── Domain sub-apps ─────────────────────────────────────────────────────
+app.route('/', openauthApi);
 app.route('/auth', authApi);
 app.route('/', runtimeApi);
 
 // ── Admin SPA redirect ──────────────────────────────────────────────────
+app.get('/', (c) => c.redirect('/admin/', 301));
 app.get('/admin', (c) => c.redirect('/admin/', 301));
 
 // ── Admin API (login/logout + authenticated routes) ─────────────────────

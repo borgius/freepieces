@@ -9,7 +9,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-wrangler dev &
+wrangler dev --port 9321 &
 WRANGLER_PID=$!
 
 vite --config vite.config.admin.ts

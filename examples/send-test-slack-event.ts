@@ -21,7 +21,7 @@
 
 import 'dotenv/config';
 
-const BASE_URL    = process.env['FREEPIECES_PUBLIC_URL'] ?? process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
+const BASE_URL    = process.env['FREEPIECES_PUBLIC_URL'] ?? process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
 const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
 const BOT_TOKEN   = process.env['SLACK_BOT_TOKEN'] ?? '';
 const CHANNEL     = process.env['SLACK_CHANNEL'] ?? '';

@@ -4,7 +4,7 @@
  */
 
 import { Hono } from 'hono';
-import { basicAuth } from 'hono/basic-auth';
+import { getCookie } from 'hono/cookie';
 import { getPiece } from '../framework/registry';
 import { buildCallbackUrl } from '../framework/auth';
 import {
@@ -13,7 +13,7 @@ import {
   resolveOAuthClientCredentials,
 } from '../lib/oauth';
 import { storeToken } from '../lib/token-store';
-import { timingSafeEqual } from '../lib/admin-session';
+import { createAuthClient, subjects } from '../auth/client';
 import type { Env, OAuth2AuthDefinition, OAuthTokenRecord } from '../framework/types';
 
 const authApi = new Hono<{ Bindings: Env }>();
@@ -97,31 +97,33 @@ authApi.get('/callback/:piece', async (c) => {
       err instanceof Error && err.message.startsWith('Missing OAuth client credentials')
         ? 503
         : 400;
-    const isKnownError =
+    const message =
       err instanceof Error &&
       (err.message.startsWith('Missing') ||
         err.message.startsWith('Invalid') ||
-        err.message.startsWith('Token exchange'));
-    const message = isKnownError && err instanceof Error
-      ? err.message
-      : 'OAuth callback failed';
+        err.message.startsWith('Token exchange'))
+        ? err.message
+        : 'OAuth callback failed';
     return c.json({ error: message }, status);
   }
 });
 
-// ── Seed tokens (admin-protected, Basic auth) ─────────────────────────
+// ── Seed tokens (admin-protected via OpenAuth) ─────────────────────────
 authApi.post(
   '/tokens/:piece',
   async (c, next) => {
-    if (!c.env.ADMIN_USER || !c.env.ADMIN_PASSWORD) {
-      return c.json({ error: 'Admin credentials not configured' }, 503);
+    // Check for admin session via cookie or Bearer token
+    const accessToken =
+      getCookie(c, '__fp_admin') ??
+      c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
+    if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
+
+    const client = createAuthClient(c.env.FREEPIECES_PUBLIC_URL);
+    const verified = await client.verify(subjects, accessToken);
+    if (verified.err || verified.subject.type !== 'admin') {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
-    return basicAuth({
-      verifyUser: (username, password) =>
-        timingSafeEqual(username, c.env.ADMIN_USER!) &&
-        timingSafeEqual(password, c.env.ADMIN_PASSWORD!),
-      invalidUserMessage: { error: 'Unauthorized' },
-    })(c, next);
+    await next();
   },
   async (c) => {
     const pieceName = c.req.param('piece');

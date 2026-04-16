@@ -23,11 +23,23 @@ export interface FreePiecesClientOptions {
    */
   token?: string;
   /**
+   * OpenAuth access token (JWT) for authenticating with the freepieces worker.
+   * When set, takes precedence over `token` (static API key).
+   * The JWT is verified against the embedded OpenAuth issuer at /oa.
+   *
+   * Obtain via the OpenAuth authorization flow or `client.authorize()`.
+   *
+   * @example 'eyJhbGciOiJSUzI1NiIs...'
+   */
+  accessToken?: string;
+  /**
    * The user identity used as the KV lookup key for stored OAuth2 tokens.
    * Required in production (when `token` is a shared API key) so the
    * worker knows whose token to retrieve.
    *
    * In local dev (no `token`) this is sent as the bearer token itself.
+   * When using `accessToken`, the userId is extracted from the JWT but
+   * can be overridden here.
    *
    * @example 'alice@example.com'
    */

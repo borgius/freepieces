@@ -34,11 +34,11 @@ What the script does:
 	- installs dependencies
 	- creates .env from .env.example when needed
 	- rewrites a few values for local development:
-			FREEPIECES_PUBLIC_URL=http://localhost:8787
-			FREEPIECES_URL=http://localhost:8787
+			FREEPIECES_PUBLIC_URL=http://localhost:9321
+			FREEPIECES_URL=http://localhost:9321
 			TOKEN_STORE_ID=00000000000000000000000000000000
 			RUN_API_KEY commented out by default
-			ADMIN_SIGNING_KEY generated automatically
+			AUTH_STORE_ID placeholder for local dev
 
 What the script does not do:
 	- create a real Cloudflare KV namespace
@@ -87,34 +87,23 @@ ensure_pnpm() {
 	command_exists pnpm || die 'Unable to activate pnpm. Install pnpm manually and re-run the script.'
 }
 
-generate_signing_key() {
-	if command_exists openssl; then
-		openssl rand -hex 32
-		return
-	fi
-
-	node --input-type=module -e "import crypto from 'node:crypto'; console.log(crypto.randomBytes(32).toString('hex'))"
-}
-
 write_env_file() {
 	[[ -f "$ENV_EXAMPLE" ]] || die ".env.example not found at $ENV_EXAMPLE"
 
 	cp "$ENV_EXAMPLE" "$ENV_FILE"
-	local signing_key
-	signing_key="$(generate_signing_key)"
 
-	node --input-type=module - "$ENV_FILE" "$signing_key" <<'NODE'
+	node --input-type=module - "$ENV_FILE" <<'NODE'
 import fs from 'node:fs';
 
-const [envFile, signingKey] = process.argv.slice(2);
+const [envFile] = process.argv.slice(2);
 let text = fs.readFileSync(envFile, 'utf8');
 
 const replacements = [
-	['FREEPIECES_PUBLIC_URL=https://<your-worker>.workers.dev', 'FREEPIECES_PUBLIC_URL=http://localhost:8787'],
+	['FREEPIECES_PUBLIC_URL=https://<your-worker>.workers.dev', 'FREEPIECES_PUBLIC_URL=http://localhost:9321'],
 	['TOKEN_STORE_ID=<your-kv-namespace-id>', 'TOKEN_STORE_ID=00000000000000000000000000000000'],
+	['AUTH_STORE_ID=<your-auth-kv-namespace-id>', 'AUTH_STORE_ID=00000000000000000000000000000001'],
 	['RUN_API_KEY=fp_sk_<64-char-hex-string>', '# RUN_API_KEY=fp_sk_your-local-key'],
-	['FREEPIECES_URL=https://<your-worker>.workers.dev', 'FREEPIECES_URL=http://localhost:8787'],
-	['ADMIN_SIGNING_KEY=<64-char-hex-string>', `ADMIN_SIGNING_KEY=${signingKey}`],
+	['FREEPIECES_URL=https://<your-worker>.workers.dev', 'FREEPIECES_URL=http://localhost:9321'],
 ];
 
 for (const [from, to] of replacements) {
@@ -126,6 +115,7 @@ NODE
 
 	log "Created $ENV_FILE with local-friendly defaults"
 	warn 'TOKEN_STORE_ID is a local placeholder. Replace it with a real namespace ID before deployment.'
+	warn 'AUTH_STORE_ID is a local placeholder. Replace it with a real namespace ID before deployment.'
 	warn 'Provider credentials such as Gmail and Slack secrets are still placeholders.'
 }
 
@@ -164,8 +154,8 @@ Next steps:
 			 cd "$ROOT_DIR"
 			 npm run worker:dev
 	3. In another terminal, smoke test the worker:
-			 curl http://localhost:8787/health
-			 curl -X POST http://localhost:8787/run/example-apikey/ping \
+			 curl http://localhost:9321/health
+			 curl -X POST http://localhost:9321/run/example-apikey/ping \
 				 -H "Content-Type: application/json" \
 				 -H "Authorization: Bearer dev-token" \
 				 -d '{"hello":"world"}'

@@ -30,10 +30,10 @@ Think about auth in `freepieces` as five separate layers.
 
 | Layer | Purpose | Examples |
 | --- | --- | --- |
-| Cloudflare config auth | Protect infrastructure-level secrets and bindings | `TOKEN_ENCRYPTION_KEY`, `ADMIN_PASSWORD`, `RUN_API_KEY`, `TOKEN_STORE` |
-| Runtime caller auth | Decide whether a caller is allowed to use `/run`, `/trigger`, and `/subscriptions` | `Authorization: Bearer <RUN_API_KEY>` |
+| Cloudflare config auth | Protect infrastructure-level secrets and bindings | `TOKEN_ENCRYPTION_KEY`, `ADMIN_EMAILS`, `RUN_API_KEY`, `TOKEN_STORE` |
+| Runtime caller auth | Decide whether a caller is allowed to use `/run`, `/trigger`, and `/subscriptions` | `Authorization: Bearer <RUN_API_KEY>` or OpenAuth JWT |
 | Provider credential auth | Give the piece credentials to talk to Gmail, Slack, or another provider | stored OAuth token, Slack bot token, raw API key |
-| Admin auth | Protect the admin UI and admin-only APIs | `/admin/api/login`, `__fp_admin` cookie |
+| Admin auth | Protect the admin UI and admin-only APIs | OpenAuth session via `/oa`, `__fp_admin` cookie |
 | Inbound webhook authenticity | Verify that incoming provider webhooks are genuine | Slack signing secret on `/webhook/slack` |
 
 Those layers are related, but they are not the same.
@@ -44,7 +44,7 @@ For example:
 
 - `RUN_API_KEY` proves that **your caller may use the worker**.
 - A Gmail OAuth token proves that **the piece may call Gmail for one user**.
-- `ADMIN_USER` and `ADMIN_PASSWORD` prove that **someone may use the admin UI**.
+- An OpenAuth session proves that **someone may use the admin UI**.
 - `SLACK_SIGNING_SECRET` proves that **an inbound Slack webhook really came from Slack**.
 
 If you keep those roles separate in your head, the rest of the system becomes much easier to understand.
@@ -59,16 +59,17 @@ Here is the route-level summary.
 | `GET /pieces` | anyone | none | metadata only |
 | `GET /auth/login/:piece?userId=...` | browser/user | none at worker level | starts browser OAuth for native OAuth2 pieces |
 | `GET /auth/callback/:piece` | provider redirect | signed `state` parameter | finishes native OAuth2 flow and stores token |
-| `POST /auth/tokens/:piece` | admin/operator | HTTP Basic auth with `ADMIN_USER` / `ADMIN_PASSWORD` | seeds tokens directly into KV |
+| `POST /auth/tokens/:piece` | admin/operator | OpenAuth admin session (cookie or Bearer JWT) | seeds tokens directly into KV |
 | `POST /run/:piece/:action` | app, script, SDK | runtime auth | executes an action |
 | `POST /trigger/:piece/:trigger` | app, script, SDK | runtime auth | executes a trigger directly |
 | `POST /subscriptions/:piece/:trigger` | app, script, SDK | runtime auth | creates a stored subscription |
 | `GET /subscriptions/:piece` | app, script, SDK | runtime auth | lists subscriptions for the current runtime identity |
 | `DELETE /subscriptions/:piece/:trigger/:id` | app, script, SDK | runtime auth | deletes a subscription for the current runtime identity |
 | `POST /webhook/:piece` | provider webhook | provider-specific validation, if configured | receives inbound webhooks |
-| `POST /admin/api/login` | browser/admin UI | username + password JSON body | creates admin session cookie |
+| `GET /admin/api/login-url?provider=...` | browser/admin UI | none | returns OpenAuth authorization URL |
+| `GET /admin/api/callback` | OpenAuth redirect | `code` query param | exchanges code for tokens, sets session cookies |
 | `POST /admin/api/logout` | browser/admin UI | none required to clear cookie | clears admin session |
-| `GET /admin/api/me` and other protected `/admin/api/*` routes | browser/admin UI | `__fp_admin` signed cookie | admin panel access |
+| `GET /admin/api/me` and other protected `/admin/api/*` routes | browser/admin UI | `__fp_admin` + `__fp_admin_refresh` cookies | admin panel access |
 
 ## Where auth data lives
 
@@ -80,8 +81,10 @@ Here is the route-level summary.
 | Token store binding | `TOKEN_STORE` KV binding | stores encrypted OAuth tokens and admin state |
 | Token encryption key | `TOKEN_ENCRYPTION_KEY` secret | 32 raw bytes, represented as 64 hex characters |
 | Runtime caller key | `RUN_API_KEY` secret | optional, but recommended for deployed workers |
-| Admin username/password | `ADMIN_USER`, `ADMIN_PASSWORD` secrets | protect the admin UI and `/auth/tokens/:piece` |
-| Admin cookie signing key | `ADMIN_SIGNING_KEY` secret | signs the `__fp_admin` session cookie |
+| Admin email allowlist | `ADMIN_EMAILS` secret | comma-separated emails that get the `admin` role |
+| Allowed user emails | `ALLOWED_EMAILS` secret | comma-separated emails allowed to register (invite-only) |
+| Auth store binding | `AUTH_STORE` KV binding | stores OpenAuth sessions and codes |
+| Auth sender email | `AUTH_SENDER_EMAIL` secret | verified sender for email verification codes |
 | Piece OAuth client credentials | piece-specific secrets | for example `GMAIL_CLIENT_ID` |
 | Direct single-credential | `X-Piece-Token` header | maps to the first CUSTOM_AUTH prop or the raw token |
 | Direct multi-credential | `X-Piece-Auth` header | JSON object of named string props for multi-prop CUSTOM_AUTH |
@@ -152,21 +155,29 @@ Repository convention: use an `fp_sk_...` prefix for this value.
 
 That prefix is a convention, not a separate protocol. The important part is that the caller sends the exact configured secret.
 
-### `ADMIN_USER` and `ADMIN_PASSWORD`
+### `ADMIN_EMAILS`
 
-These protect:
+A comma-separated list of email addresses that receive the `admin` role when they authenticate via OpenAuth.
 
-- the admin login endpoint
-- the admin session flow
-- the token-seeding route `POST /auth/tokens/:piece`
+Admins can access the admin UI and the token-seeding route `POST /auth/tokens/:piece`.
 
-### `ADMIN_SIGNING_KEY`
+### `ALLOWED_EMAILS`
 
-This key signs the admin session cookie.
+A comma-separated list of additional email addresses allowed to register.
 
-Like `TOKEN_ENCRYPTION_KEY`, it should be generated from strong random bytes.
+This makes the system invite-only. If neither `ADMIN_EMAILS` nor `ALLOWED_EMAILS` contains an email, registration is rejected.
 
-The code uses HMAC-SHA256 to sign session tokens.
+### `AUTH_STORE`
+
+A Cloudflare KV namespace binding used by OpenAuth to store session data, authorization codes, and refresh tokens.
+
+This is separate from `TOKEN_STORE` to keep auth infrastructure data isolated from piece-level OAuth tokens.
+
+### `AUTH_SENDER_EMAIL`
+
+The verified sender address used when sending email verification codes via Cloudflare Email Workers.
+
+The domain must have Email Routing enabled. When this binding or env var is absent, verification codes are logged to the console (useful for local dev).
 
 ### `SLACK_SIGNING_SECRET`
 
@@ -343,10 +354,14 @@ This is handled by `resolveRuntimeRequestAuth(...)`.
 
 ### Secured mode: `RUN_API_KEY` is configured
 
-When `RUN_API_KEY` is set, runtime auth is split into two concerns:
+When `RUN_API_KEY` is set, runtime auth supports two authentication methods:
 
-1. authenticate the caller
-2. pass provider credentials separately
+1. **Static API key**: the caller sends `Authorization: Bearer <RUN_API_KEY>`
+2. **OpenAuth JWT**: the caller sends `Authorization: Bearer <OpenAuth-access-token>`
+
+Both methods are checked in order. If neither succeeds, the worker returns `401`.
+
+For static API key mode, pass provider credentials separately:
 
 Use headers like this:
 
@@ -596,11 +611,13 @@ It is useful when:
 
 This route does **not** use `RUN_API_KEY`.
 
-Instead, it requires HTTP Basic auth using the admin credentials:
+Instead, it requires an OpenAuth admin session (cookie or Bearer JWT):
 
 ```http
-Authorization: Basic base64(<ADMIN_USER>:<ADMIN_PASSWORD>)
+Authorization: Bearer <OpenAuth-access-token>
 ```
+
+Or via the `__fp_admin` cookie set by the admin login flow.
 
 ### Request body
 
@@ -635,51 +652,49 @@ Admin auth is separate from runtime auth.
 
 The admin panel is served from `/admin/`, and its API lives under `/admin/api/*`.
 
+Admin authentication uses [OpenAuth](https://openauth.js.org/) — a standards-based OAuth2 auth server embedded in the worker at `/oa`.
+
+### Supported providers
+
+The OpenAuth issuer supports multiple login methods:
+
+- **Email code** — sends a one-time verification code via Cloudflare Email Workers
+- **Google** — requires `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+- **GitHub** — requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+
+### Invite-only registration
+
+Registration is invite-only. An email must appear in either `ADMIN_EMAILS` or `ALLOWED_EMAILS` to be allowed. Emails in `ADMIN_EMAILS` receive the `admin` subject; all others receive the `user` subject.
+
 ### Login flow
 
-The browser sends:
-
-```text
-POST /admin/api/login
-```
-
-with a JSON body like:
-
-```json
-{
-	"username": "admin",
-	"password": "your-password"
-}
-```
-
-If the credentials match `ADMIN_USER` and `ADMIN_PASSWORD`, the worker returns a signed session cookie.
+1. The admin UI calls `GET /admin/api/login-url?provider=code|google|github`
+2. The worker returns an OpenAuth authorization URL
+3. The browser redirects to the OpenAuth provider (email form, Google consent, or GitHub consent)
+4. After authentication, OpenAuth redirects to `GET /admin/api/callback` with a `code`
+5. The callback exchanges the code for access and refresh tokens
+6. If the subject is `admin`, two cookies are set: `__fp_admin` (access token) and `__fp_admin_refresh` (refresh token)
+7. The browser is redirected to `/admin/`
 
 ### Session cookie details
 
-The admin session cookie is named:
+Two cookies are used:
 
-```text
-__fp_admin
-```
+- `__fp_admin` — the OpenAuth access token (short-lived JWT)
+- `__fp_admin_refresh` — the OpenAuth refresh token
 
-Cookie properties in the current implementation:
+Cookie properties:
 
 - `HttpOnly`
-- `SameSite=Strict`
+- `SameSite=Lax`
 - `Path=/admin`
-- `Max-Age=86400`
 - `Secure` only when the request is over HTTPS
 
-The cookie payload is an HMAC-signed token containing:
-
-- `sub` — username
-- `exp` — absolute expiry timestamp
-
-The session TTL is 24 hours.
+The middleware automatically refreshes expired access tokens using the refresh token.
 
 ### Protected admin routes
 
-After login, protected admin APIs require a valid signed cookie, including routes such as:
+After login, protected admin APIs require a valid session, including routes such as:
 
 - `GET /admin/api/me`
 - `GET /admin/api/pieces`
@@ -690,7 +705,7 @@ After login, protected admin APIs require a valid signed cookie, including route
 
 ### Logout
 
-`POST /admin/api/logout` clears the cookie by setting the same cookie name with `Max-Age=0`.
+`POST /admin/api/logout` clears both session cookies by setting `Max-Age=0`.
 
 ## Inbound webhook authenticity
 
@@ -867,11 +882,11 @@ Without it, OAuth state verification and token encryption break.
 
 It must represent 32 raw bytes. In practice that means 64 hex characters.
 
-### Forgetting admin secrets in local or deployed environments
+### Forgetting admin auth configuration
 
-Without `ADMIN_USER`, `ADMIN_PASSWORD`, and `ADMIN_SIGNING_KEY`:
+Without `ADMIN_EMAILS` and the `AUTH_STORE` KV binding:
 
-- the admin panel cannot log in
+- the admin panel cannot authenticate
 - the token-seeding route cannot authenticate
 
 ### Assuming webhook routes use `RUN_API_KEY`

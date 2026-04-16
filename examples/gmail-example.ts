@@ -33,7 +33,7 @@
  *   RECIPIENT_EMAIL  where to send the test email (defaults to your own address)
  */
 
-const BASE_URL = process.env['FREEPIECES_PUBLIC_URL'] ?? process.env['FREEPIECES_URL'] ?? 'http://localhost:8787';
+const BASE_URL = process.env['FREEPIECES_PUBLIC_URL'] ?? process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
 const USER_ID = process.env['USER_ID'] ?? 'your-user-id';
 const RECIPIENT_EMAIL = process.env['RECIPIENT_EMAIL'] ?? 'your@email.com';
 

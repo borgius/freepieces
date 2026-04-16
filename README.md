@@ -206,21 +206,30 @@ const client = createClient({
 
 The admin console is a React SPA served from `/admin/`.
 
+Authentication uses [OpenAuth](https://openauth.js.org/) with invite-only registration.
+
 ```bash
-# Set credentials before first login
-wrangler secret put ADMIN_USER          # e.g. "admin"
-wrangler secret put ADMIN_PASSWORD      # strong password
-wrangler secret put ADMIN_SIGNING_KEY   # openssl rand -hex 32
+# Set admin emails (comma-separated)
+wrangler secret put ADMIN_EMAILS        # e.g. "admin@example.com,ops@example.com"
+
+# Optional: allow additional non-admin users
+wrangler secret put ALLOWED_EMAILS      # e.g. "dev@example.com"
+
+# Optional: enable social login providers
+wrangler secret put GOOGLE_CLIENT_ID
+wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put GITHUB_CLIENT_ID
+wrangler secret put GITHUB_CLIENT_SECRET
 
 # Build and deploy
 npm run build:admin && ./scripts/deploy.sh
 ```
 
-Then open `https://<your-worker>.workers.dev/admin/` and log in. Sessions last 24 hours.
+Then open `https://<your-worker>.workers.dev/admin/` and sign in with email code, Google, or GitHub.
 
 OAuth-backed pieces also show a foldable **Users** section in the admin UI so you can inspect which stored `userId` values currently have tokens.
 
-**Local dev:** add the same three variables to `.env`, run `npm run worker:dev`, and open `http://localhost:8787/admin/`.
+**Local dev:** add `ADMIN_EMAILS` to `.env`, run `npm run worker:dev`, and open `http://localhost:9321/admin/`. Verification codes are logged to the console when the EMAIL binding is absent.
 
 The admin UI also includes a **Docs** tab that renders the repository guides directly from `docs/*.mdx`.
 

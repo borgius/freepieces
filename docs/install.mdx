@@ -53,11 +53,11 @@ When the script creates a new `.env`, it writes local-first defaults.
 
 | Variable | Local value |
 | --- | --- |
-| `FREEPIECES_PUBLIC_URL` | `http://localhost:8787` |
-| `FREEPIECES_URL` | `http://localhost:8787` |
+| `FREEPIECES_PUBLIC_URL` | `http://localhost:9321` |
+| `FREEPIECES_URL` | `http://localhost:9321` |
 | `TOKEN_STORE_ID` | `00000000000000000000000000000000` |
 | `RUN_API_KEY` | commented out by default |
-| `ADMIN_SIGNING_KEY` | generated automatically |
+| `AUTH_STORE_ID` | `00000000000000000000000000000001` |
 
 ### Why those defaults exist
 
@@ -181,14 +181,14 @@ npm run worker:dev
 Then, in another terminal:
 
 ```bash
-curl http://localhost:8787/health
-curl http://localhost:8787/pieces
+curl http://localhost:9321/health
+curl http://localhost:9321/pieces
 ```
 
 For a simple smoke test without provider credentials:
 
 ```bash
-curl -X POST http://localhost:8787/run/example-apikey/ping \
+curl -X POST http://localhost:9321/run/example-apikey/ping \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dev-token" \
   -d '{"hello":"world"}'
@@ -236,9 +236,9 @@ Because local bootstrap does not create Cloudflare resources. The placeholder is
 
 Because local development is easier when the worker uses the bearer fallback mode. Once you want secured local or deployed behavior, uncomment it and use a real `fp_sk_...` value.
 
-### Why does the script generate `ADMIN_SIGNING_KEY` automatically?
+### Why does the script set a placeholder `AUTH_STORE_ID`?
 
-The local admin UI needs a signing key for admin sessions. Generating one automatically removes one more manual setup step.
+OpenAuth needs a KV namespace for session storage. The placeholder value lets `wrangler dev` start locally. For deployment, create a real KV namespace with `wrangler kv namespace create AUTH_STORE`.
 
 ### Do I need Gmail or Slack credentials to get started?
 
