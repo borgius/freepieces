@@ -53,11 +53,11 @@ function makePieceProxy<T>(
  * ```ts
  * import { createClient } from 'freepieces/sdk';
  *
- * // Production — token is the shared RUN_API_KEY secret, userId identifies
+ * // Production — token is the shared FREEPIECES_RUN_API_KEY secret, userId identifies
  * // the user whose stored OAuth2 token should be retrieved from KV.
  * const client = createClient({
  *   baseUrl: 'https://freepieces.example.workers.dev',
- *   token:   process.env.RUN_API_KEY,   // fp_sk_<hex32>
+ *   token:   process.env.FREEPIECES_RUN_API_KEY,   // fp_sk_<hex32>
  *   userId:  'alice@example.com',
  * });
  *
@@ -210,7 +210,7 @@ export class FreePiecesClient {
  *
  * const client = createClient({
  *   baseUrl: process.env.FREEPIECES_URL!,
- *   token:   process.env.RUN_API_KEY,
+ *   token:   process.env.FREEPIECES_RUN_API_KEY,
  *   userId:  process.env.USER_ID,
  *   pieceToken: process.env.FREEPIECES_PIECE_TOKEN,
  * });

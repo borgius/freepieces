@@ -3,7 +3,7 @@
  *
  * Run with static API key:
  *   FREEPIECES_URL=https://freepieces.example.workers.dev \
- *   RUN_API_KEY=fp_sk_<your-key> \
+ *   FREEPIECES_RUN_API_KEY=fp_sk_<your-key> \
  *   USER_ID=alice@example.com \
  *   node --import tsx examples/sdk-example.ts
  *
@@ -12,7 +12,7 @@
  *   ACCESS_TOKEN=<openauth-jwt> \
  *   node --import tsx examples/sdk-example.ts
  *
- * Local dev (no RUN_API_KEY — worker runs without the gating secret):
+ * Local dev (no FREEPIECES_RUN_API_KEY — worker runs without the gating secret):
  *   FREEPIECES_URL=http://localhost:9321 USER_ID=alice npx tsx examples/sdk-example.ts
  */
 
@@ -26,7 +26,7 @@ const client = createClient({
   // Option 1: Static API key + user ID (M2M)
   // Option 2: OpenAuth access token (JWT from /oa flow)
   // Option 3: Local dev — only USER_ID needed as bearer fallback
-  token:       process.env['RUN_API_KEY'],
+  token:       process.env['FREEPIECES_RUN_API_KEY'] ?? process.env['FP_RUN_API_KEY'] ?? process.env['RUN_API_KEY'],
   accessToken: process.env['ACCESS_TOKEN'],
   userId:      process.env['USER_ID'],
 });

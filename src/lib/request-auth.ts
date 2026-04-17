@@ -60,6 +60,7 @@ export async function resolveRuntimeRequestAuth(
   headers: Headers,
   runApiKey?: string,
   publicUrl?: string,
+  issuerFetch?: typeof fetch,
 ): Promise<RuntimeRequestAuthResult> {
   const authHeader = headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ')
@@ -81,7 +82,7 @@ export async function resolveRuntimeRequestAuth(
   // Mode 2: OpenAuth JWT verification
   if (bearerToken && publicUrl) {
     try {
-      const client = createAuthClient(publicUrl);
+      const client = createAuthClient(publicUrl, issuerFetch);
       const verified = await client.verify(subjects, bearerToken);
       if (!verified.err) {
         const jwtUserId = verified.subject.properties.userId ?? verified.subject.properties.email;

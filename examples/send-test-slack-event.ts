@@ -9,7 +9,7 @@
  *
  * Required env vars (from .env):
  *   FREEPIECES_PUBLIC_URL   base URL of the deployed worker
- *   RUN_API_KEY             runtime auth key
+ *   FREEPIECES_RUN_API_KEY  runtime auth key (also accepted: FP_RUN_API_KEY, RUN_API_KEY)
  *   SLACK_BOT_TOKEN         xoxb-... bot token
  *   SLACK_CHANNEL           channel ID to post to
  *   SLACK_USER_ID           user ID for runtime auth headers
@@ -22,7 +22,7 @@
 import 'dotenv/config';
 
 const BASE_URL    = process.env['FREEPIECES_PUBLIC_URL'] ?? process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
-const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
+const RUN_API_KEY = process.env['FREEPIECES_RUN_API_KEY'] ?? process.env['FP_RUN_API_KEY'] ?? process.env['RUN_API_KEY'] ?? '';
 const BOT_TOKEN   = process.env['SLACK_BOT_TOKEN'] ?? '';
 const CHANNEL     = process.env['SLACK_CHANNEL'] ?? '';
 const USER_ID     = process.env['SLACK_USER_ID'] ?? '';

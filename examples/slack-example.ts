@@ -63,7 +63,7 @@
  * Environment variables
  * ─────────────────────
  *   FREEPIECES_URL      base URL of the deployed worker
- *   RUN_API_KEY         shared runtime auth key for secured workers
+ *   FREEPIECES_RUN_API_KEY  shared runtime auth key for secured workers (also: FP_RUN_API_KEY, RUN_API_KEY)
  *   SLACK_CHANNEL       channel ID to post the test message in (default: general)
  *   SLACK_USER_ID       Slack user ID for DM test and KV key for stored tokens
  *
@@ -82,8 +82,8 @@
 
 import 'dotenv/config';
 
-const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
-const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
+const BASE_URL = process.env['FREEPIECES_URL'] ?? process.env['FP_URL'] ?? 'http://localhost:9321';
+const RUN_API_KEY = process.env['FREEPIECES_RUN_API_KEY'] ?? process.env['FP_RUN_API_KEY'] ?? process.env['RUN_API_KEY'] ?? '';
 // ── Bot token auth (CUSTOM_AUTH) ──────────────────────────────────────────────
 // Never expires. Sent directly as X-Piece-Token when RUN_API_KEY is enabled,
 // otherwise used as the bearer fallback.

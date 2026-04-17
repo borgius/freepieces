@@ -2,6 +2,7 @@ import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { resolveRuntimeRequestAuth, type RuntimeRequestCredentials } from './request-auth';
 import { getEnvStr } from './env';
+import { createAuthIssuer } from '../auth/issuer';
 import type { Env } from '../framework/types';
 
 /**
@@ -19,10 +20,15 @@ export const runtimeAuth = createMiddleware<{
   Bindings: Env;
   Variables: { credentials: RuntimeRequestCredentials };
 }>(async (c, next) => {
+  const issuerApp = createAuthIssuer(c.env);
+  const issuerFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    issuerApp.fetch(new Request(input, init))) as typeof fetch;
+
   const result = await resolveRuntimeRequestAuth(
     c.req.raw.headers,
     getEnvStr(c.env, 'RUN_API_KEY'),
     new URL(c.req.url).origin,
+    issuerFetch,
   );
   if (!result.ok) {
     throw new HTTPException(result.status, { message: result.error });

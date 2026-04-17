@@ -10,14 +10,14 @@ FREEPIECES_PUBLIC_URL = "https://freepieces.modena.workers.dev"
 
 # KV namespace for encrypted per-user OAuth token storage.
 # Canonical binding name: FREEPIECES_TOKEN_STORE (also accepted: FP_TOKEN_STORE, TOKEN_STORE).
-# TOKEN_STORE_ID is read from .env (gitignored).
+# FREEPIECES_TOKEN_STORE_ID is read from .env (gitignored).
 [[kv_namespaces]]
 binding = "FREEPIECES_TOKEN_STORE"
 id = "da830ef4b53e41d48f25efd8fb980eab"
 
 # KV namespace for OpenAuth session/token storage.
 # Canonical binding name: FREEPIECES_AUTH_STORE (also accepted: FP_AUTH_STORE, AUTH_STORE).
-# AUTH_STORE_ID is read from .env (gitignored).
+# FREEPIECES_AUTH_STORE_ID is read from .env (gitignored).
 [[kv_namespaces]]
 binding = "FREEPIECES_AUTH_STORE"
 id = "3a3757c905c648a6bfd9d34a10e3bcfa"
@@ -35,7 +35,7 @@ directory = "./dist/public"
 binding = "ASSETS"
 
 # Static credentials are stored as Cloudflare Secrets (never in vars).
-# Each variable is resolved in order: FREEPIECES_<NAME> → FP_<NAME> → <NAME> (legacy).
+# Each variable resolves: FREEPIECES_<NAME> → FP_<NAME> → <NAME> (legacy).
 # Use the FREEPIECES_ canonical form for new deployments.
 #
 #   wrangler secret put FREEPIECES_TOKEN_ENCRYPTION_KEY   # 32 random hex bytes → AES-GCM key material
@@ -44,7 +44,6 @@ binding = "ASSETS"
 # Gmail OAuth2 credentials:
 #   wrangler secret put FREEPIECES_GMAIL_CLIENT_ID
 #   wrangler secret put FREEPIECES_GMAIL_CLIENT_SECRET
-#   (also accepted: FP_GMAIL_CLIENT_ID / GMAIL_CLIENT_ID, etc.)
 #
 # Example OAuth2 piece credentials:
 #   wrangler secret put FREEPIECES_EXAMPLE_OAUTH_CLIENT_ID

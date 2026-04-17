@@ -3,14 +3,16 @@
 #
 # Prerequisites (already provisioned if you ran this before):
 #   - wrangler installed and authenticated  (wrangler whoami)
-#   - KV namespace TOKEN_STORE created      (id in .env as TOKEN_STORE_ID)
+#   - KV namespace FREEPIECES_TOKEN_STORE created   (id in .env as FREEPIECES_TOKEN_STORE_ID)
+#   - KV namespace FREEPIECES_AUTH_STORE created    (id in .env as FREEPIECES_AUTH_STORE_ID)
 #   - Secrets already set via wrangler:
-#       TOKEN_ENCRYPTION_KEY  – 32-byte AES-GCM key  (openssl rand -hex 32)
-#       Per-piece OAuth secrets, e.g. GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
+#       FREEPIECES_TOKEN_ENCRYPTION_KEY  – 32-byte AES-GCM key  (openssl rand -hex 32)
+#       Per-piece OAuth secrets, e.g. FREEPIECES_GMAIL_CLIENT_ID / FREEPIECES_GMAIL_CLIENT_SECRET
+#       (also accepted: FP_* and legacy unprefixed names)
 #
 # Usage:
 #   ./scripts/deploy.sh                   # build + deploy
-#   ./scripts/deploy.sh --rotate-key      # regenerate TOKEN_ENCRYPTION_KEY and deploy
+#   ./scripts/deploy.sh --rotate-key      # regenerate FREEPIECES_TOKEN_ENCRYPTION_KEY and deploy
 #   ./scripts/deploy.sh --dry-run         # local type-check + build only, no Cloudflare changes
 
 set -euo pipefail
@@ -32,17 +34,17 @@ else
 fi
 
 PUBLIC_URL="${FREEPIECES_PUBLIC_URL:?FREEPIECES_PUBLIC_URL not set in .env}"
-KV_BINDING="TOKEN_STORE"
-KV_NAMESPACE_ID="${TOKEN_STORE_ID:?TOKEN_STORE_ID not set in .env}"
-AUTH_KV_BINDING="AUTH_STORE"
-AUTH_KV_NAMESPACE_ID="${AUTH_STORE_ID:?AUTH_STORE_ID not set in .env}"
+KV_BINDING="FREEPIECES_TOKEN_STORE"
+KV_NAMESPACE_ID="${FREEPIECES_TOKEN_STORE_ID:?FREEPIECES_TOKEN_STORE_ID not set in .env}"
+AUTH_KV_BINDING="FREEPIECES_AUTH_STORE"
+AUTH_KV_NAMESPACE_ID="${FREEPIECES_AUTH_STORE_ID:?FREEPIECES_AUTH_STORE_ID not set in .env}"
 
 if [[ ! "$KV_NAMESPACE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
-  die "TOKEN_STORE_ID in .env must be a real 32-character KV namespace ID. Current value: $KV_NAMESPACE_ID"
+  die "FREEPIECES_TOKEN_STORE_ID in .env must be a real 32-character KV namespace ID. Current value: $KV_NAMESPACE_ID"
 fi
 
 if [[ ! "$AUTH_KV_NAMESPACE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
-  die "AUTH_STORE_ID in .env must be a real 32-character KV namespace ID. Current value: $AUTH_KV_NAMESPACE_ID"
+  die "FREEPIECES_AUTH_STORE_ID in .env must be a real 32-character KV namespace ID. Current value: $AUTH_KV_NAMESPACE_ID"
 fi
 
 if [[ ! "$PUBLIC_URL" =~ ^https?:// ]]; then
@@ -109,53 +111,74 @@ if [[ "$DRY_RUN" != "true" ]]; then
 
   # ── Optional: rotate encryption key ─────────────────────────────────────────
   if [[ "$ROTATE_KEY" == "true" ]]; then
-    echo "==> Rotating TOKEN_ENCRYPTION_KEY..."
-    openssl rand -hex 32 | wrangler secret put TOKEN_ENCRYPTION_KEY
+    echo "==> Rotating FREEPIECES_TOKEN_ENCRYPTION_KEY..."
+    openssl rand -hex 32 | wrangler secret put FREEPIECES_TOKEN_ENCRYPTION_KEY
     echo "    ⚠️  Existing encrypted tokens in KV will be unreadable after key rotation."
+  elif [[ -n "${FREEPIECES_TOKEN_ENCRYPTION_KEY:-${FP_TOKEN_ENCRYPTION_KEY:-${TOKEN_ENCRYPTION_KEY:-}}}" ]]; then
+    _enc_key="${FREEPIECES_TOKEN_ENCRYPTION_KEY:-${FP_TOKEN_ENCRYPTION_KEY:-${TOKEN_ENCRYPTION_KEY}}}"
+    echo "==> Setting FREEPIECES_TOKEN_ENCRYPTION_KEY from .env..."
+    echo "$_enc_key" | wrangler secret put FREEPIECES_TOKEN_ENCRYPTION_KEY
+    echo "    FREEPIECES_TOKEN_ENCRYPTION_KEY set."
+  else
+    echo "⚠️  FREEPIECES_TOKEN_ENCRYPTION_KEY not set in .env — skipping."
+    echo "    Set it or run: wrangler secret put FREEPIECES_TOKEN_ENCRYPTION_KEY"
   fi
 
   # ── Ensure admin & auth secrets are configured ───────────────────────────
-  if [[ -n "${ADMIN_EMAILS:-}" ]]; then
-    echo "==> Setting ADMIN_EMAILS from .env..."
-    echo "$ADMIN_EMAILS" | wrangler secret put ADMIN_EMAILS
-    echo "    ADMIN_EMAILS set."
+  # Reads from .env using canonical FREEPIECES_ names; falls back to FP_ and legacy names.
+  ADMIN_EMAILS_VAL="${FREEPIECES_ADMIN_EMAILS:-${FP_ADMIN_EMAILS:-${ADMIN_EMAILS:-}}}"
+  if [[ -n "$ADMIN_EMAILS_VAL" ]]; then
+    echo "==> Setting FREEPIECES_ADMIN_EMAILS from .env..."
+    echo "$ADMIN_EMAILS_VAL" | wrangler secret put FREEPIECES_ADMIN_EMAILS
+    echo "    FREEPIECES_ADMIN_EMAILS set."
   else
-    echo "⚠️  ADMIN_EMAILS not set in .env"
-    echo "    Set it (comma-separated emails) and re-run, or use: wrangler secret put ADMIN_EMAILS"
+    echo "⚠️  FREEPIECES_ADMIN_EMAILS (or FP_ADMIN_EMAILS / ADMIN_EMAILS) not set in .env"
+    echo "    Set it (comma-separated emails) and re-run, or use: wrangler secret put FREEPIECES_ADMIN_EMAILS"
   fi
 
-  if [[ -n "${ALLOWED_EMAILS:-}" ]]; then
-    echo "==> Setting ALLOWED_EMAILS from .env..."
-    echo "$ALLOWED_EMAILS" | wrangler secret put ALLOWED_EMAILS
-    echo "    ALLOWED_EMAILS set."
+  ALLOWED_EMAILS_VAL="${FREEPIECES_ALLOWED_EMAILS:-${FP_ALLOWED_EMAILS:-${ALLOWED_EMAILS:-}}}"
+  if [[ -n "$ALLOWED_EMAILS_VAL" ]]; then
+    echo "==> Setting FREEPIECES_ALLOWED_EMAILS from .env..."
+    echo "$ALLOWED_EMAILS_VAL" | wrangler secret put FREEPIECES_ALLOWED_EMAILS
+    echo "    FREEPIECES_ALLOWED_EMAILS set."
+  fi
+
+  AUTH_SENDER_VAL="${FREEPIECES_AUTH_SENDER_EMAIL:-${FP_AUTH_SENDER_EMAIL:-${AUTH_SENDER_EMAIL:-}}}"
+  if [[ -n "$AUTH_SENDER_VAL" ]]; then
+    echo "==> Setting FREEPIECES_AUTH_SENDER_EMAIL from .env..."
+    echo "$AUTH_SENDER_VAL" | wrangler secret put FREEPIECES_AUTH_SENDER_EMAIL
+    echo "    FREEPIECES_AUTH_SENDER_EMAIL set."
   fi
 
   # ── Optional: OpenAuth social login provider credentials ────────────────
-  for var in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
-    if [[ -n "${!var:-}" ]]; then
-      echo "==> Setting $var from .env..."
-      echo "${!var}" | wrangler secret put "$var"
+  for base in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
+    fp_key="FREEPIECES_${base}"
+    fp_short="FP_${base}"
+    val="${!fp_key:-${!fp_short:-${!base:-}}}"
+    if [[ -n "$val" ]]; then
+      echo "==> Setting $fp_key from .env..."
+      echo "$val" | wrangler secret put "$fp_key"
     fi
   done
 
   # ── Ensure KV namespaces exist ─────────────────────────────────────────
-  echo "==> Verifying KV namespace $KV_NAMESPACE_ID (TOKEN_STORE) exists..."
+  echo "==> Verifying KV namespace $KV_NAMESPACE_ID (FREEPIECES_TOKEN_STORE) exists..."
   if ! wrangler kv namespace list 2>/dev/null | grep -q "$KV_NAMESPACE_ID"; then
     echo "    KV namespace $KV_NAMESPACE_ID not found – creating..."
     wrangler kv namespace create "$KV_BINDING"
-    echo "    Update TOKEN_STORE_ID in .env with the new namespace ID, then re-run npm run deploy."
+    echo "    Update FREEPIECES_TOKEN_STORE_ID in .env with the new namespace ID, then re-run npm run deploy."
     exit 1
   fi
-  echo "    TOKEN_STORE KV namespace OK."
+  echo "    FREEPIECES_TOKEN_STORE KV namespace OK."
 
-  echo "==> Verifying KV namespace $AUTH_KV_NAMESPACE_ID (AUTH_STORE) exists..."
+  echo "==> Verifying KV namespace $AUTH_KV_NAMESPACE_ID (FREEPIECES_AUTH_STORE) exists..."
   if ! wrangler kv namespace list 2>/dev/null | grep -q "$AUTH_KV_NAMESPACE_ID"; then
     echo "    KV namespace $AUTH_KV_NAMESPACE_ID not found – creating..."
     wrangler kv namespace create "$AUTH_KV_BINDING"
-    echo "    Update AUTH_STORE_ID in .env with the new namespace ID, then re-run npm run deploy."
+    echo "    Update FREEPIECES_AUTH_STORE_ID in .env with the new namespace ID, then re-run npm run deploy."
     exit 1
   fi
-  echo "    AUTH_STORE KV namespace OK."
+  echo "    FREEPIECES_AUTH_STORE KV namespace OK."
 else
   echo "==> Dry run mode: skipping Wrangler auth, secret updates, KV checks, and deploy."
 fi
@@ -185,9 +208,9 @@ echo "    Pieces     : $PUBLIC_URL/pieces"
 echo "    Admin UI   : $PUBLIC_URL/admin/"
 echo "    Auth       : $PUBLIC_URL/oa"
 echo ""
-echo "To update admin emails:        wrangler secret put ADMIN_EMAILS"
-echo "To add allowed users:          wrangler secret put ALLOWED_EMAILS"
-echo "To add Google social login:    wrangler secret put GOOGLE_CLIENT_ID && wrangler secret put GOOGLE_CLIENT_SECRET"
-echo "To add GitHub social login:    wrangler secret put GITHUB_CLIENT_ID && wrangler secret put GITHUB_CLIENT_SECRET"
-echo "To update piece OAuth creds:   wrangler secret put <PIECE>_CLIENT_ID && wrangler secret put <PIECE>_CLIENT_SECRET"
+echo "To update admin emails:        wrangler secret put FREEPIECES_ADMIN_EMAILS"
+echo "To add allowed users:          wrangler secret put FREEPIECES_ALLOWED_EMAILS"
+echo "To add Google social login:    wrangler secret put FREEPIECES_GOOGLE_CLIENT_ID && wrangler secret put FREEPIECES_GOOGLE_CLIENT_SECRET"
+echo "To add GitHub social login:    wrangler secret put FREEPIECES_GITHUB_CLIENT_ID && wrangler secret put FREEPIECES_GITHUB_CLIENT_SECRET"
+echo "To update piece OAuth creds:   wrangler secret put FREEPIECES_<PIECE>_CLIENT_ID && wrangler secret put FREEPIECES_<PIECE>_CLIENT_SECRET"
 echo "To rotate the encryption key:  ./scripts/deploy.sh --rotate-key"

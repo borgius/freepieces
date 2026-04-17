@@ -89,8 +89,8 @@ export function createAuthIssuer(env: Env) {
   );
 
   // ── Google OAuth — enabled when credentials are configured ──────────
-  const googleClientId = env.GOOGLE_CLIENT_ID as string | undefined;
-  const googleClientSecret = env.GOOGLE_CLIENT_SECRET as string | undefined;
+  const googleClientId = getEnvStr(env, 'GOOGLE_CLIENT_ID');
+  const googleClientSecret = getEnvStr(env, 'GOOGLE_CLIENT_SECRET');
   if (googleClientId && googleClientSecret) {
     providers.google = GoogleProvider({
       clientID: googleClientId,
@@ -100,8 +100,8 @@ export function createAuthIssuer(env: Env) {
   }
 
   // ── GitHub OAuth — enabled when credentials are configured ──────────
-  const githubClientId = env.GITHUB_CLIENT_ID as string | undefined;
-  const githubClientSecret = env.GITHUB_CLIENT_SECRET as string | undefined;
+  const githubClientId = getEnvStr(env, 'GITHUB_CLIENT_ID');
+  const githubClientSecret = getEnvStr(env, 'GITHUB_CLIENT_SECRET');
   if (githubClientId && githubClientSecret) {
     providers.github = GithubProvider({
       clientID: githubClientId,

@@ -10,6 +10,7 @@ import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
+import { createAuthIssuer } from '../auth/issuer';
 import {
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
@@ -21,6 +22,18 @@ import {
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
 import { requireEnvStr, requireKVBinding } from '../lib/env';
+
+/**
+ * Returns a fetch function that routes OpenAuth issuer requests (token, jwks,
+ * well-known, authorize) directly to the embedded issuer Hono app instead of
+ * making outbound subrequests. Cloudflare Workers cannot reliably fetch their
+ * own URL — this keeps all JWT-related calls fully in-process.
+ */
+function makeIssuerFetch(env: Env): typeof fetch {
+  const issuerApp = createAuthIssuer(env);
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    issuerApp.fetch(new Request(input, init))) as typeof fetch;
+}
 
 const COOKIE_NAME = '__fp_admin';
 const REFRESH_COOKIE = '__fp_admin_refresh';
@@ -36,8 +49,9 @@ adminApi.get('/callback', async (c) => {
   const code = c.req.query('code');
   if (!code) return c.json({ error: 'Missing code parameter' }, 400);
 
+  const origin = new URL(c.req.url).origin;
   const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;
-  const client = createAuthClient(new URL(c.req.url).origin);
+  const client = createAuthClient(origin, makeIssuerFetch(c.env));
   const exchanged = await client.exchange(code, redirectUri);
   if (exchanged.err) {
     return c.json({ error: 'Token exchange failed' }, 401);
@@ -90,7 +104,7 @@ adminApi.use('*', async (c, next) => {
   const refreshToken = getCookie(c, REFRESH_COOKIE);
   if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
 
-  const client = createAuthClient(new URL(c.req.url).origin);
+  const client = createAuthClient(new URL(c.req.url).origin, makeIssuerFetch(c.env));
   const verified = await client.verify(subjects, accessToken, {
     refresh: refreshToken,
   });

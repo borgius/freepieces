@@ -65,10 +65,10 @@ class MemoryKv {
 function createEnv(kv: KVNamespace): Env {
   return {
     FREEPIECES_PUBLIC_URL: 'https://freepieces.example.workers.dev',
-    TOKEN_STORE: kv,
-    AUTH_STORE: new MemoryKv() as unknown as KVNamespace,
-    TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-    ADMIN_EMAILS: 'admin@example.com',
+    FREEPIECES_TOKEN_STORE: kv,
+    FREEPIECES_AUTH_STORE: new MemoryKv() as unknown as KVNamespace,
+    FREEPIECES_TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    FREEPIECES_ADMIN_EMAILS: 'admin@example.com',
   };
 }
 
@@ -152,7 +152,7 @@ describe('admin piece users', () => {
 describe('queue delivery for subscriptions', () => {
   function createEnvWithQueue(kv: KVNamespace, queueBinding?: { name: string; send: ReturnType<typeof vi.fn> }): Env {
     const env = createEnv(kv);
-    env.RUN_API_KEY = 'fp_sk_test';
+    env.FREEPIECES_RUN_API_KEY = 'fp_sk_test';
     if (queueBinding) {
       env[queueBinding.name] = { send: queueBinding.send };
     }

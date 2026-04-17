@@ -10,8 +10,8 @@
  * Prerequisites
  * ─────────────
  *   • Worker deployed:       scripts/deploy.sh
- *   • Gmail secrets set:     wrangler secret put GMAIL_CLIENT_ID
- *                            wrangler secret put GMAIL_CLIENT_SECRET
+ *   • Gmail secrets set:     wrangler secret put FREEPIECES_GMAIL_CLIENT_ID
+ *                            wrangler secret put FREEPIECES_GMAIL_CLIENT_SECRET
  *   • Node.js ≥ 20 with tsx: npx tsx examples/gmail-example.ts
  *
  * Usage (first time — authorize your Google account)
@@ -40,7 +40,7 @@ const RECIPIENT_EMAIL = process.env['RECIPIENT_EMAIL'] ?? 'your@email.com';
 // When RUN_API_KEY is set the Authorization header carries the shared secret and
 // the userId is sent separately as X-User-Id.  When absent (local dev) the
 // bearer token IS the userId (backward-compatible).
-const RUN_API_KEY = process.env['RUN_API_KEY'];
+const RUN_API_KEY = process.env['FREEPIECES_RUN_API_KEY'] ?? process.env['FP_RUN_API_KEY'] ?? process.env['RUN_API_KEY'];
 
 const PIECE = 'gmail';
 
