@@ -7,6 +7,7 @@
 
 import { getToken } from './token-store';
 import { refreshTokenIfNeeded } from './oauth';
+import { getKVBinding, getEnvStr } from './env';
 import type { Env, OAuth2AuthDefinition, ApPiece } from '../framework/types';
 
 /**
@@ -23,8 +24,10 @@ export async function resolveNativeRuntimeAuth(
   if (authDef.type === 'oauth2') {
     const lookupKey = userId;
     const directToken = pieceToken ?? lookupKey;
-    const storedRecord = lookupKey && env.TOKEN_STORE
-      ? await getToken(env.TOKEN_STORE, pieceName, lookupKey, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+    const tokenStore = getKVBinding(env, 'TOKEN_STORE');
+    const encryptionKey = getEnvStr(env, 'TOKEN_ENCRYPTION_KEY');
+    const storedRecord = lookupKey && tokenStore && encryptionKey
+      ? await getToken(tokenStore, pieceName, lookupKey, encryptionKey).catch((err) => {
           console.error('[freepieces] Failed to retrieve token from KV:', err);
           return null;
         })
@@ -69,8 +72,10 @@ export async function resolveApRuntimeAuth(
   userId?: string,
   pieceToken?: string,
 ): Promise<Record<string, string> | undefined> {
-  const storedRecord = userId && env.TOKEN_STORE
-    ? await getToken(env.TOKEN_STORE, pieceName, userId, env.TOKEN_ENCRYPTION_KEY).catch((err) => {
+  const tokenStore = getKVBinding(env, 'TOKEN_STORE');
+  const encryptionKey = getEnvStr(env, 'TOKEN_ENCRYPTION_KEY');
+  const storedRecord = userId && tokenStore && encryptionKey
+    ? await getToken(tokenStore, pieceName, userId, encryptionKey).catch((err) => {
         console.error('[freepieces] KV lookup failed for AP piece:', err);
         return null;
       })

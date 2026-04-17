@@ -1,88 +1,116 @@
 // ---------------------------------------------------------------------------
 // Cloudflare Workers environment bindings
 // ---------------------------------------------------------------------------
+//
+// Every string var / secret and every KV binding is resolved via the helpers in
+// src/lib/env.ts, which check keys in this priority order:
+//   1. FREEPIECES_<NAME>  — canonical prefixed form (preferred)
+//   2. FP_<NAME>          — short-prefix fallback
+//   3. <NAME>             — un-prefixed legacy name (backward compat)
+//
+// Both the FREEPIECES_ and FP_ variants are listed as optional below so
+// TypeScript accepts wrangler.toml configs that use either naming scheme.
+// ---------------------------------------------------------------------------
 export interface Env {
-  /** Public base URL used for building OAuth callback URLs. */
-  FREEPIECES_PUBLIC_URL: string;
+  // ── Public URL ──────────────────────────────────────────────────────────
+  /** Public base URL (canonical). e.g. FREEPIECES_PUBLIC_URL in [vars]. */
+  FREEPIECES_PUBLIC_URL?: string;
+  /** Short-prefix alias. e.g. FP_PUBLIC_URL in [vars]. */
+  FP_PUBLIC_URL?: string;
+  /** Legacy un-prefixed name (backward compat). */
+  PUBLIC_URL?: string;
 
-  /** KV namespace for encrypted per-user OAuth tokens and admin state. Bind in wrangler.toml. */
-  TOKEN_STORE: KVNamespace;
+  // ── Token store KV binding ───────────────────────────────────────────────
+  /** KV namespace for encrypted OAuth tokens and admin state (canonical). */
+  FREEPIECES_TOKEN_STORE?: KVNamespace;
+  /** Short-prefix alias. */
+  FP_TOKEN_STORE?: KVNamespace;
+  /** Legacy un-prefixed binding name (backward compat). */
+  TOKEN_STORE?: KVNamespace;
 
-  /** Cloudflare Queue for async trigger processing. Bind in wrangler.toml as [[queues.producers]]. */
-  TRIGGER_QUEUE?: Queue;
-
-  /** Static-assets binding for the admin SPA. Configured via [assets] in wrangler.toml. */
-  ASSETS?: Fetcher;
-
-  // -- Static credentials stored as Cloudflare Secrets (never in vars) -------
+  // ── Token encryption key ─────────────────────────────────────────────────
   /**
-   * 64-char hex string representing 32 raw bytes used as AES-GCM key material.
-   * Generate with:  openssl rand -hex 32
-   * Store with:     wrangler secret put TOKEN_ENCRYPTION_KEY
+   * 64-char hex string (32 raw bytes) for AES-GCM encryption (canonical).
+   * Generate with: openssl rand -hex 32
+   * Store with:    wrangler secret put FREEPIECES_TOKEN_ENCRYPTION_KEY
    */
-  TOKEN_ENCRYPTION_KEY: string;
+  FREEPIECES_TOKEN_ENCRYPTION_KEY?: string;
+  /** Short-prefix alias. */
+  FP_TOKEN_ENCRYPTION_KEY?: string;
+  /** Legacy un-prefixed name (backward compat). */
+  TOKEN_ENCRYPTION_KEY?: string;
 
-  /** KV namespace for OpenAuth session/token storage. Bind in wrangler.toml. */
-  AUTH_STORE: KVNamespace;
+  // ── Auth store KV binding ────────────────────────────────────────────────
+  /** KV namespace for OpenAuth session/token storage (canonical). */
+  FREEPIECES_AUTH_STORE?: KVNamespace;
+  /** Short-prefix alias. */
+  FP_AUTH_STORE?: KVNamespace;
+  /** Legacy un-prefixed binding name (backward compat). */
+  AUTH_STORE?: KVNamespace;
 
+  // ── Runtime API key ───────────────────────────────────────────────────────
   /**
-   * Comma-separated list of email addresses that are admins.
-   * Users whose email matches get the "admin" subject (full admin panel access).
-   * Store with: wrangler secret put ADMIN_EMAILS
+   * Shared caller-auth secret for /run, /trigger, /subscriptions (canonical).
+   * Store with: wrangler secret put FREEPIECES_RUN_API_KEY
    */
+  FREEPIECES_RUN_API_KEY?: string;
+  /** Short-prefix alias. */
+  FP_RUN_API_KEY?: string;
+  /** Legacy un-prefixed name (backward compat). */
+  RUN_API_KEY?: string;
+
+  // ── Admin / invite-only email lists ──────────────────────────────────────
+  /** Comma-separated admin emails (canonical). */
+  FREEPIECES_ADMIN_EMAILS?: string;
+  FP_ADMIN_EMAILS?: string;
+  /** Legacy un-prefixed name (backward compat). */
   ADMIN_EMAILS?: string;
 
-  /**
-   * Comma-separated list of allowed emails (non-admin users).
-   * Combined with ADMIN_EMAILS for the invite-only gate.
-   * Store with: wrangler secret put ALLOWED_EMAILS
-   */
+  /** Comma-separated allowed (non-admin) emails (canonical). */
+  FREEPIECES_ALLOWED_EMAILS?: string;
+  FP_ALLOWED_EMAILS?: string;
+  /** Legacy un-prefixed name (backward compat). */
   ALLOWED_EMAILS?: string;
 
-  /**
-   * Verified sender email address for Cloudflare Email Workers.
-   * Must be on a domain with Email Routing enabled.
-   * Set in wrangler.toml [vars] or as a secret.
-   */
+  // ── Email sender ──────────────────────────────────────────────────────────
+  /** Verified sender address for verification code emails (canonical). */
+  FREEPIECES_AUTH_SENDER_EMAIL?: string;
+  FP_AUTH_SENDER_EMAIL?: string;
+  /** Legacy un-prefixed name (backward compat). */
   AUTH_SENDER_EMAIL?: string;
 
+  // ── Email Workers send binding ────────────────────────────────────────────
   /**
    * Cloudflare Email Workers send binding for delivering verification codes.
    * Configured via [[send_email]] in wrangler.toml.
    */
+  FREEPIECES_EMAIL?: { send: (msg: unknown) => Promise<void> };
+  FP_EMAIL?: { send: (msg: unknown) => Promise<void> };
+  /** Legacy un-prefixed binding name (backward compat). */
   EMAIL?: { send: (msg: unknown) => Promise<void> };
 
-  /** Google OAuth client ID for OpenAuth. Store with: wrangler secret put GOOGLE_CLIENT_ID */
+  // ── OpenAuth social providers ─────────────────────────────────────────────
+  FREEPIECES_GOOGLE_CLIENT_ID?: string;
+  FP_GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_ID?: string;
-  /** Google OAuth client secret for OpenAuth. Store with: wrangler secret put GOOGLE_CLIENT_SECRET */
+
+  FREEPIECES_GOOGLE_CLIENT_SECRET?: string;
+  FP_GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_SECRET?: string;
-  /** GitHub OAuth client ID for OpenAuth. Store with: wrangler secret put GITHUB_CLIENT_ID */
+
+  FREEPIECES_GITHUB_CLIENT_ID?: string;
+  FP_GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_ID?: string;
-  /** GitHub OAuth client secret for OpenAuth. Store with: wrangler secret put GITHUB_CLIENT_SECRET */
+
+  FREEPIECES_GITHUB_CLIENT_SECRET?: string;
+  FP_GITHUB_CLIENT_SECRET?: string;
   GITHUB_CLIENT_SECRET?: string;
 
-  /**
-   * Slack app signing secret (found in Slack app → Basic Information → Signing Secret).
-   * When set, all requests to POST /webhook/slack are verified via X-Slack-Signature.
-   * Store with: wrangler secret put SLACK_SIGNING_SECRET
-   */
-  SLACK_SIGNING_SECRET?: string;
-
-  /**
-   * Optional shared secret that gates all /run, /trigger, and /subscriptions
-   * endpoints. When set, every request to those routes must carry:
-   *   Authorization: Bearer <RUN_API_KEY>
-   * and any runtime credentials must be sent separately as:
-   *   X-User-Id: <userId>
-   *   X-Piece-Token: <token>
-   *
-   * When absent (e.g. local dev with wrangler dev), the bearer token remains
-   * the fallback for both userId and direct piece-token behaviour.
-   *
-   * Generate with:  openssl rand -hex 32
-   * Store with:     wrangler secret put RUN_API_KEY
-   */
-  RUN_API_KEY?: string;
+  // ── Cloudflare Queue / static-assets bindings ─────────────────────────────
+  /** Cloudflare Queue for async trigger processing. */
+  TRIGGER_QUEUE?: Queue;
+  /** Static-assets binding for the admin SPA. */
+  ASSETS?: Fetcher;
 
   [key: string]: unknown;
 }

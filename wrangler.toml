@@ -9,21 +9,24 @@ compatibility_flags = ["nodejs_compat"]
 FREEPIECES_PUBLIC_URL = "https://freepieces.modena.workers.dev"
 
 # KV namespace for encrypted per-user OAuth token storage.
+# Canonical binding name: FREEPIECES_TOKEN_STORE (also accepted: FP_TOKEN_STORE, TOKEN_STORE).
 # TOKEN_STORE_ID is read from .env (gitignored).
 [[kv_namespaces]]
-binding = "TOKEN_STORE"
+binding = "FREEPIECES_TOKEN_STORE"
 id = "da830ef4b53e41d48f25efd8fb980eab"
 
 # KV namespace for OpenAuth session/token storage.
+# Canonical binding name: FREEPIECES_AUTH_STORE (also accepted: FP_AUTH_STORE, AUTH_STORE).
 # AUTH_STORE_ID is read from .env (gitignored).
 [[kv_namespaces]]
-binding = "AUTH_STORE"
-id = "placeholder-replace-with-real-id"
+binding = "FREEPIECES_AUTH_STORE"
+id = "3a3757c905c648a6bfd9d34a10e3bcfa"
 
 # Cloudflare Email Workers – send verification codes.
+# Canonical binding name: FREEPIECES_EMAIL (also accepted: FP_EMAIL, EMAIL).
 # Requires Email Routing enabled on the domain.
 [[send_email]]
-name = "EMAIL"
+name = "FREEPIECES_EMAIL"
 
 # Static assets – the compiled admin React SPA.
 # Build with: npm run build:admin
@@ -31,34 +34,42 @@ name = "EMAIL"
 directory = "./dist/public"
 binding = "ASSETS"
 
-# Static credentials are stored as Cloudflare Secrets (never in vars):
-#   wrangler secret put TOKEN_ENCRYPTION_KEY   # 32 random hex bytes → AES-GCM key material
+# Static credentials are stored as Cloudflare Secrets (never in vars).
+# Each variable is resolved in order: FREEPIECES_<NAME> → FP_<NAME> → <NAME> (legacy).
+# Use the FREEPIECES_ canonical form for new deployments.
+#
+#   wrangler secret put FREEPIECES_TOKEN_ENCRYPTION_KEY   # 32 random hex bytes → AES-GCM key material
+#   (also accepted: FP_TOKEN_ENCRYPTION_KEY, TOKEN_ENCRYPTION_KEY)
 #
 # Gmail OAuth2 credentials:
-#   wrangler secret put GMAIL_CLIENT_ID
-#   wrangler secret put GMAIL_CLIENT_SECRET
+#   wrangler secret put FREEPIECES_GMAIL_CLIENT_ID
+#   wrangler secret put FREEPIECES_GMAIL_CLIENT_SECRET
+#   (also accepted: FP_GMAIL_CLIENT_ID / GMAIL_CLIENT_ID, etc.)
 #
 # Example OAuth2 piece credentials:
-#   wrangler secret put EXAMPLE_OAUTH_CLIENT_ID
-#   wrangler secret put EXAMPLE_OAUTH_CLIENT_SECRET
+#   wrangler secret put FREEPIECES_EXAMPLE_OAUTH_CLIENT_ID
+#   wrangler secret put FREEPIECES_EXAMPLE_OAUTH_CLIENT_SECRET
 #
 # Admin UI credentials (set in .env for local dev, secrets for production):
-#   wrangler secret put ADMIN_EMAILS            # comma-separated admin email list
-#   wrangler secret put ALLOWED_EMAILS          # comma-separated allowed (non-admin) email list
+#   wrangler secret put FREEPIECES_ADMIN_EMAILS     # comma-separated admin email list
+#   wrangler secret put FREEPIECES_ALLOWED_EMAILS   # comma-separated allowed (non-admin) email list
+#   (also accepted: FP_ADMIN_EMAILS / ADMIN_EMAILS, etc.)
 #
 # OpenAuth provider credentials (optional — social logins enabled when set):
-#   wrangler secret put GOOGLE_CLIENT_ID
-#   wrangler secret put GOOGLE_CLIENT_SECRET
-#   wrangler secret put GITHUB_CLIENT_ID
-#   wrangler secret put GITHUB_CLIENT_SECRET
+#   wrangler secret put FREEPIECES_GOOGLE_CLIENT_ID
+#   wrangler secret put FREEPIECES_GOOGLE_CLIENT_SECRET
+#   wrangler secret put FREEPIECES_GITHUB_CLIENT_ID
+#   wrangler secret put FREEPIECES_GITHUB_CLIENT_SECRET
 #
 # Verification email sender address (set in [vars] or as secret):
-#   AUTH_SENDER_EMAIL = "noreply@yourdomain.com"
+#   FREEPIECES_AUTH_SENDER_EMAIL = "noreply@yourdomain.com"
+#   (also accepted: FP_AUTH_SENDER_EMAIL, AUTH_SENDER_EMAIL)
 #
 # Runtime API key (recommended):
-#   wrangler secret put RUN_API_KEY            # prefix with fp_sk_, e.g. fp_sk_<hex32>
+#   wrangler secret put FREEPIECES_RUN_API_KEY     # prefix with fp_sk_, e.g. fp_sk_<hex32>
+#   (also accepted: FP_RUN_API_KEY, RUN_API_KEY)
 # When set, runtime callers use:
-#   Authorization: Bearer <RUN_API_KEY>
+#   Authorization: Bearer <FREEPIECES_RUN_API_KEY>
 #   X-User-Id: <userId>
 #   X-Piece-Token: <token>
 

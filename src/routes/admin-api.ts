@@ -20,6 +20,7 @@ import {
   pieceSupportsStoredUsers,
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
+import { requireEnvStr, requireKVBinding } from '../lib/env';
 
 const COOKIE_NAME = '__fp_admin';
 const REFRESH_COOKIE = '__fp_admin_refresh';
@@ -35,7 +36,7 @@ adminApi.get('/callback', async (c) => {
   const code = c.req.query('code');
   if (!code) return c.json({ error: 'Missing code parameter' }, 400);
 
-  const redirectUri = `${c.env.FREEPIECES_PUBLIC_URL}/admin/api/callback`;
+  const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;
   const client = createAuthClient(new URL(c.req.url).origin);
   const exchanged = await client.exchange(code, redirectUri);
   if (exchanged.err) {
@@ -132,9 +133,9 @@ adminApi.get('/me', (c) => {
 
 // GET /admin/api/login-url — returns the OpenAuth authorization URL
 adminApi.get('/login-url', (c) => {
-  const redirectUri = `${c.env.FREEPIECES_PUBLIC_URL}/admin/api/callback`;
+  const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;
   const provider = c.req.query('provider') ?? 'code';
-  const issuerUrl = `${c.env.FREEPIECES_PUBLIC_URL}/oa`;
+  const issuerUrl = `${requireEnvStr(c.env, 'PUBLIC_URL')}/oa`;
   const authorizationUrl = new URL(`${issuerUrl}/authorize`);
   authorizationUrl.searchParams.set('client_id', 'freepieces-worker');
   authorizationUrl.searchParams.set('redirect_uri', redirectUri);
@@ -180,7 +181,7 @@ adminApi.get('/pieces', async (c) => {
         .filter((group) => group.secrets.length > 0),
       supportsUsers: pieceSupportsStoredUsers(p.auth),
       hasAutoUserId: pieceHasAutoUserId(p.auth),
-      enabled: await isPieceEnabled(c.env.TOKEN_STORE, p.name),
+      enabled: await isPieceEnabled(requireKVBinding(c.env, 'TOKEN_STORE'), p.name),
     })),
   );
   return c.json(result);
@@ -195,7 +196,7 @@ adminApi.get('/pieces/:name/users', async (c) => {
     return c.json({ error: 'Piece does not store user tokens' }, 400);
   }
 
-  const users = (await listStoredUserIds(c.env.TOKEN_STORE, name)).map((userId) => ({
+  const users = (await listStoredUserIds(requireKVBinding(c.env, 'TOKEN_STORE'), name)).map((userId) => ({
     userId,
     displayName: userId,
   }));
@@ -212,7 +213,7 @@ adminApi.delete('/pieces/:name/users/:userId', async (c) => {
   if (!pieceSupportsStoredUsers(piece.auth)) {
     return c.json({ error: 'Piece does not store user tokens' }, 400);
   }
-  await deleteToken(c.env.TOKEN_STORE, name, userId);
+  await deleteToken(requireKVBinding(c.env, 'TOKEN_STORE'), name, userId);
   return c.json({ ok: true });
 });
 
@@ -251,7 +252,7 @@ adminApi.get('/secrets', (c) => {
 adminApi.post('/pieces/:name/install', async (c) => {
   const name = c.req.param('name');
   if (!getPiece(name)) return c.json({ error: 'Piece not found' }, 404);
-  await c.env.TOKEN_STORE.put(PIECE_FLAG(name), 'true');
+  await requireKVBinding(c.env, 'TOKEN_STORE').put(PIECE_FLAG(name), 'true');
   return c.json({ ok: true, name, enabled: true });
 });
 
@@ -259,7 +260,7 @@ adminApi.post('/pieces/:name/install', async (c) => {
 adminApi.delete('/pieces/:name', async (c) => {
   const name = c.req.param('name');
   if (!getPiece(name)) return c.json({ error: 'Piece not found' }, 404);
-  await c.env.TOKEN_STORE.put(PIECE_FLAG(name), 'false');
+  await requireKVBinding(c.env, 'TOKEN_STORE').put(PIECE_FLAG(name), 'false');
   return c.json({ ok: true, name, enabled: false });
 });
 

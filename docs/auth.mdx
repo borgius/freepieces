@@ -30,8 +30,8 @@ Think about auth in `freepieces` as five separate layers.
 
 | Layer | Purpose | Examples |
 | --- | --- | --- |
-| Cloudflare config auth | Protect infrastructure-level secrets and bindings | `TOKEN_ENCRYPTION_KEY`, `ADMIN_EMAILS`, `RUN_API_KEY`, `TOKEN_STORE` |
-| Runtime caller auth | Decide whether a caller is allowed to use `/run`, `/trigger`, and `/subscriptions` | `Authorization: Bearer <RUN_API_KEY>` or OpenAuth JWT |
+| Cloudflare config auth | Protect infrastructure-level secrets and bindings | `FREEPIECES_TOKEN_ENCRYPTION_KEY`, `FREEPIECES_ADMIN_EMAILS`, `FREEPIECES_RUN_API_KEY`, `FREEPIECES_TOKEN_STORE` |
+| Runtime caller auth | Decide whether a caller is allowed to use `/run`, `/trigger`, and `/subscriptions` | `Authorization: Bearer <FREEPIECES_RUN_API_KEY>` or OpenAuth JWT |
 | Provider credential auth | Give the piece credentials to talk to Gmail, Slack, or another provider | stored OAuth token, Slack bot token, raw API key |
 | Admin auth | Protect the admin UI and admin-only APIs | OpenAuth session via `/oa`, `__fp_admin` cookie |
 | Inbound webhook authenticity | Verify that incoming provider webhooks are genuine | Slack signing secret on `/webhook/slack` |
@@ -77,19 +77,19 @@ Here is the route-level summary.
 
 | Data | Where it lives | Notes |
 | --- | --- | --- |
-| Public Worker URL | `FREEPIECES_PUBLIC_URL` var | used to build callback and webhook URLs |
-| Token store binding | `TOKEN_STORE` KV binding | stores encrypted OAuth tokens and admin state |
-| Token encryption key | `TOKEN_ENCRYPTION_KEY` secret | 32 raw bytes, represented as 64 hex characters |
-| Runtime caller key | `RUN_API_KEY` secret | optional, but recommended for deployed workers |
-| Admin email allowlist | `ADMIN_EMAILS` secret | comma-separated emails that get the `admin` role |
-| Allowed user emails | `ALLOWED_EMAILS` secret | comma-separated emails allowed to register (invite-only) |
-| Auth store binding | `AUTH_STORE` KV binding | stores OpenAuth sessions and codes |
-| Auth sender email | `AUTH_SENDER_EMAIL` secret | verified sender for email verification codes |
-| Piece OAuth client credentials | piece-specific secrets | for example `GMAIL_CLIENT_ID` |
+| Public Worker URL | `FREEPIECES_PUBLIC_URL` var | also accepted: `FP_PUBLIC_URL`. Used to build callback and webhook URLs |
+| Token store binding | `FREEPIECES_TOKEN_STORE` KV binding | also accepted: `FP_TOKEN_STORE`, `TOKEN_STORE`. Stores encrypted OAuth tokens and admin state |
+| Token encryption key | `FREEPIECES_TOKEN_ENCRYPTION_KEY` secret | also accepted: `FP_TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY`. 32 raw bytes as 64 hex characters |
+| Runtime caller key | `FREEPIECES_RUN_API_KEY` secret | also accepted: `FP_RUN_API_KEY`, `RUN_API_KEY`. Optional, but recommended for deployed workers |
+| Admin email allowlist | `FREEPIECES_ADMIN_EMAILS` secret | also accepted: `FP_ADMIN_EMAILS`, `ADMIN_EMAILS`. Comma-separated emails with the `admin` role |
+| Allowed user emails | `FREEPIECES_ALLOWED_EMAILS` secret | also accepted: `FP_ALLOWED_EMAILS`, `ALLOWED_EMAILS`. Invite-only registration |
+| Auth store binding | `FREEPIECES_AUTH_STORE` KV binding | also accepted: `FP_AUTH_STORE`, `AUTH_STORE`. Stores OpenAuth sessions and codes |
+| Auth sender email | `FREEPIECES_AUTH_SENDER_EMAIL` secret | also accepted: `FP_AUTH_SENDER_EMAIL`, `AUTH_SENDER_EMAIL`. Verified sender for email verification codes |
+| Piece OAuth client credentials | piece-specific secrets | for example `FREEPIECES_GMAIL_CLIENT_ID` (also `FP_GMAIL_CLIENT_ID`, `GMAIL_CLIENT_ID`) |
 | Direct single-credential | `X-Piece-Token` header | maps to the first CUSTOM_AUTH prop or the raw token |
 | Direct multi-credential | `X-Piece-Auth` header | JSON object of named string props for multi-prop CUSTOM_AUTH |
 | Stored provider OAuth tokens | encrypted KV values | keyed by piece name and user ID |
-| Slack webhook signing secret | `SLACK_SIGNING_SECRET` secret | verifies inbound Slack requests |
+| Slack webhook signing secret | `FREEPIECES_SLACK_SIGNING_SECRET` secret | also accepted: `FP_SLACK_SIGNING_SECRET`, `SLACK_SIGNING_SECRET`. Verifies inbound Slack requests |
 
 The important design rule is simple:
 
@@ -101,7 +101,9 @@ The important design rule is simple:
 
 These are the global auth-related values used across the worker.
 
-### `FREEPIECES_PUBLIC_URL`
+All secrets and bindings are resolved in priority order: `FREEPIECES_<NAME>` → `FP_<NAME>` → `<NAME>` (legacy). Use the `FREEPIECES_` canonical form for new deployments.
+
+### `FREEPIECES_PUBLIC_URL` (also `FP_PUBLIC_URL`)
 
 This is the worker's public base URL.
 
@@ -113,7 +115,7 @@ It is used to build:
 
 If this value is wrong, OAuth callbacks and webhook setup will point to the wrong place.
 
-### `TOKEN_STORE`
+### `FREEPIECES_TOKEN_STORE` (also `FP_TOKEN_STORE`, `TOKEN_STORE`)
 
 This is the Cloudflare KV namespace binding.
 
@@ -124,7 +126,7 @@ It is used for more than just tokens. In this repository it stores:
 - admin piece-enabled flags
 - other admin/runtime state keyed into the same namespace
 
-### `TOKEN_ENCRYPTION_KEY`
+### `FREEPIECES_TOKEN_ENCRYPTION_KEY` (also `FP_TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY`)
 
 This is the most important secret in the OAuth flow.
 
@@ -141,45 +143,45 @@ Format requirements:
 
 If the length is wrong, encryption and decryption will fail.
 
-### `RUN_API_KEY`
+### `FREEPIECES_RUN_API_KEY` (also `FP_RUN_API_KEY`, `RUN_API_KEY`)
 
 This is the shared caller-auth secret for runtime endpoints.
 
 When it is configured, callers must send:
 
 ```http
-Authorization: Bearer <RUN_API_KEY>
+Authorization: Bearer <FREEPIECES_RUN_API_KEY>
 ```
 
 Repository convention: use an `fp_sk_...` prefix for this value.
 
 That prefix is a convention, not a separate protocol. The important part is that the caller sends the exact configured secret.
 
-### `ADMIN_EMAILS`
+### `FREEPIECES_ADMIN_EMAILS` (also `FP_ADMIN_EMAILS`, `ADMIN_EMAILS`)
 
 A comma-separated list of email addresses that receive the `admin` role when they authenticate via OpenAuth.
 
 Admins can access the admin UI and the token-seeding route `POST /auth/tokens/:piece`.
 
-### `ALLOWED_EMAILS`
+### `FREEPIECES_ALLOWED_EMAILS` (also `FP_ALLOWED_EMAILS`, `ALLOWED_EMAILS`)
 
 A comma-separated list of additional email addresses allowed to register.
 
 This makes the system invite-only. If neither `ADMIN_EMAILS` nor `ALLOWED_EMAILS` contains an email, registration is rejected.
 
-### `AUTH_STORE`
+### `FREEPIECES_AUTH_STORE` (also `FP_AUTH_STORE`, `AUTH_STORE`)
 
 A Cloudflare KV namespace binding used by OpenAuth to store session data, authorization codes, and refresh tokens.
 
 This is separate from `TOKEN_STORE` to keep auth infrastructure data isolated from piece-level OAuth tokens.
 
-### `AUTH_SENDER_EMAIL`
+### `FREEPIECES_AUTH_SENDER_EMAIL` (also `FP_AUTH_SENDER_EMAIL`, `AUTH_SENDER_EMAIL`)
 
 The verified sender address used when sending email verification codes via Cloudflare Email Workers.
 
 The domain must have Email Routing enabled. When this binding or env var is absent, verification codes are logged to the console (useful for local dev).
 
-### `SLACK_SIGNING_SECRET`
+### `FREEPIECES_SLACK_SIGNING_SECRET` (also `FP_SLACK_SIGNING_SECRET`, `SLACK_SIGNING_SECRET`)
 
 This is not general runtime auth.
 
@@ -298,6 +300,8 @@ The worker reads a username and password from env secrets:
 
 Per-piece auth secret names depend on how the piece is defined.
 
+All per-piece secret lookups also resolve with the `FREEPIECES_` → `FP_` → legacy priority order. For example, for `SLACK_BOT_TOKEN`, the worker checks `FREEPIECES_SLACK_BOT_TOKEN`, then `FP_SLACK_BOT_TOKEN`, then `SLACK_BOT_TOKEN`.
+
 ### Native OAuth2 pieces
 
 Native OAuth2 pieces declare their secret names explicitly in the piece definition:
@@ -311,15 +315,15 @@ That means the piece author chooses the exact env keys.
 
 When you register an AP piece directly, OAuth secret names are derived from the runtime piece name.
 
-For a piece named `slack`, the derived names are:
+For a piece named `slack`, the derived base names are:
 
-- `SLACK_CLIENT_ID`
-- `SLACK_CLIENT_SECRET`
+- `SLACK_CLIENT_ID` (resolved as `FREEPIECES_SLACK_CLIENT_ID` → `FP_SLACK_CLIENT_ID` → `SLACK_CLIENT_ID`)
+- `SLACK_CLIENT_SECRET` (resolved as `FREEPIECES_SLACK_CLIENT_SECRET` → `FP_SLACK_CLIENT_SECRET` → `SLACK_CLIENT_SECRET`)
 
 For a piece named `my-piece`, the derived names become:
 
-- `MY_PIECE_CLIENT_ID`
-- `MY_PIECE_CLIENT_SECRET`
+- `MY_PIECE_CLIENT_ID` (with the same prefix resolution)
+- `MY_PIECE_CLIENT_SECRET` (with the same prefix resolution)
 
 ### AP `CUSTOM_AUTH` properties
 
@@ -352,11 +356,11 @@ Runtime caller auth applies to these routes:
 
 This is handled by `resolveRuntimeRequestAuth(...)`.
 
-### Secured mode: `RUN_API_KEY` is configured
+### Secured mode: `FREEPIECES_RUN_API_KEY` is configured
 
-When `RUN_API_KEY` is set, runtime auth supports two authentication methods:
+When `FREEPIECES_RUN_API_KEY` (or its `FP_RUN_API_KEY` / `RUN_API_KEY` alias) is set, runtime auth supports two authentication methods:
 
-1. **Static API key**: the caller sends `Authorization: Bearer <RUN_API_KEY>`
+1. **Static API key**: the caller sends `Authorization: Bearer <FREEPIECES_RUN_API_KEY>`
 2. **OpenAuth JWT**: the caller sends `Authorization: Bearer <OpenAuth-access-token>`
 
 Both methods are checked in order. If neither succeeds, the worker returns `401`.
@@ -366,7 +370,7 @@ For static API key mode, pass provider credentials separately:
 Use headers like this:
 
 ```http
-Authorization: Bearer <RUN_API_KEY>
+Authorization: Bearer <FREEPIECES_RUN_API_KEY>
 X-User-Id: <userId>
 X-Piece-Token: <token>
 ```
@@ -379,13 +383,13 @@ Meaning:
 
 This is the most important rule in the whole auth system:
 
-> When `RUN_API_KEY` is enabled, the bearer token is **not** the Gmail token, Slack token, or API key. It is the shared worker access key.
+> When `FREEPIECES_RUN_API_KEY` is enabled, the bearer token is **not** the Gmail token, Slack token, or API key. It is the shared worker access key.
 
 That is why deployed requests often need more than one auth header.
 
-### Local-dev mode: `RUN_API_KEY` is not configured
+### Local-dev mode: `FREEPIECES_RUN_API_KEY` is not configured
 
-When `RUN_API_KEY` is absent, the worker keeps a compatibility fallback:
+When `FREEPIECES_RUN_API_KEY` (and its aliases) is absent, the worker keeps a compatibility fallback:
 
 ```http
 Authorization: Bearer <token-or-userId>

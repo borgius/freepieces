@@ -6,6 +6,7 @@
  */
 
 import type { Env, ApPiece } from '../framework/types';
+import { getEnvStr } from './env';
 
 /**
  * Build the execution context expected by @activepieces/pieces-framework
@@ -25,7 +26,6 @@ export function buildApContext(
   props: Record<string, unknown>,
   env: Env,
 ): unknown {
-  const envRecord = env as Record<string, string>;
   const envPrefix = pieceName.toUpperCase().replace(/-/g, '_');
 
   // Determine which auth type to use.  When auth is an array (multiple options),
@@ -53,13 +53,14 @@ export function buildApContext(
       // Build the auth object from env secrets, with optional request-time override.
       // camelCase prop names are converted to SCREAMING_SNAKE_CASE for env lookup
       // e.g. botToken → SLACK_BOT_TOKEN, apiKey → SLACK_API_KEY
+      // Env lookup checks FREEPIECES_<KEY>, FP_<KEY>, then <KEY> (via getEnvStr).
       const propKeys = Object.keys(authDef.props ?? {});
       const authProps: Record<string, string> = {};
       for (const key of propKeys) {
         const envKey = `${envPrefix}_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
         authProps[key] =
           auth?.[key] ??
-          envRecord[envKey] ??
+          getEnvStr(env, envKey) ??
           '';
       }
       // If a Bearer token was supplied and the first prop is the primary token
@@ -71,7 +72,7 @@ export function buildApContext(
       break;
     }
     if (authDef.type === 'SECRET_TEXT') {
-      apAuth = auth?.token ?? envRecord[`${envPrefix}_TOKEN`] ?? '';
+      apAuth = auth?.token ?? getEnvStr(env, `${envPrefix}_TOKEN`) ?? '';
       break;
     }
     if (authDef.type === 'OAUTH2') {
@@ -92,8 +93,8 @@ export function buildApContext(
     }
     if (authDef.type === 'BASIC_AUTH') {
       apAuth = {
-        username: envRecord[`${envPrefix}_USERNAME`] ?? '',
-        password: envRecord[`${envPrefix}_PASSWORD`] ?? '',
+        username: getEnvStr(env, `${envPrefix}_USERNAME`) ?? '',
+        password: getEnvStr(env, `${envPrefix}_PASSWORD`) ?? '',
       };
       break;
     }
@@ -111,8 +112,8 @@ export function buildApContext(
       write: async () => '',
     },
     server: {
-      apiUrl: env.FREEPIECES_PUBLIC_URL ?? '',
-      publicUrl: env.FREEPIECES_PUBLIC_URL ?? '',
+      apiUrl: getEnvStr(env, 'PUBLIC_URL') ?? '',
+      publicUrl: getEnvStr(env, 'PUBLIC_URL') ?? '',
       token: '',
     },
     connections: { get: async () => null },

@@ -13,6 +13,7 @@ import {
   resolveOAuthClientCredentials,
 } from '../lib/oauth';
 import { storeToken } from '../lib/token-store';
+import { requireEnvStr, requireKVBinding, getEnvStr } from '../lib/env';
 import { createAuthClient, subjects } from '../auth/client';
 import type { Env, OAuth2AuthDefinition, OAuthTokenRecord } from '../framework/types';
 
@@ -36,7 +37,7 @@ authApi.get('/login/:piece', async (c) => {
 
   const returnUrl = c.req.query('returnUrl');
 
-  const callbackUrl = buildCallbackUrl(c.env.FREEPIECES_PUBLIC_URL, pieceName);
+  const callbackUrl = buildCallbackUrl(requireEnvStr(c.env, 'PUBLIC_URL'), pieceName);
   let clientId: string;
   try {
     ({ clientId } = resolveOAuthClientCredentials(authDef, c.env));
@@ -50,7 +51,7 @@ authApi.get('/login/:piece', async (c) => {
     pieceName,
     callbackUrl,
     clientId,
-    encryptionKey: c.env.TOKEN_ENCRYPTION_KEY,
+    encryptionKey: requireEnvStr(c.env, 'TOKEN_ENCRYPTION_KEY'),
     userId: resolvedUserId,
     returnUrl,
   });
@@ -69,7 +70,7 @@ authApi.get('/callback/:piece', async (c) => {
 
   try {
     const url = new URL(c.req.url);
-    const callbackUrl = buildCallbackUrl(c.env.FREEPIECES_PUBLIC_URL, pieceName);
+    const callbackUrl = buildCallbackUrl(requireEnvStr(c.env, 'PUBLIC_URL'), pieceName);
     const { userId, returnUrl } = await handleCallback(
       url.searchParams,
       stored.def.auth as OAuth2AuthDefinition,
@@ -79,8 +80,8 @@ authApi.get('/callback/:piece', async (c) => {
 
     // If a same-origin returnUrl was provided, redirect back to the admin UI
     if (returnUrl) {
-      const target = new URL(returnUrl, c.env.FREEPIECES_PUBLIC_URL);
-      const origin = new URL(c.env.FREEPIECES_PUBLIC_URL).origin;
+      const target = new URL(returnUrl, requireEnvStr(c.env, 'PUBLIC_URL'));
+      const origin = new URL(requireEnvStr(c.env, 'PUBLIC_URL')).origin;
       if (target.origin === origin) {
         return c.redirect(target.toString(), 302);
       }
@@ -118,7 +119,7 @@ authApi.post(
       c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
     if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
 
-    const client = createAuthClient(c.env.FREEPIECES_PUBLIC_URL);
+    const client = createAuthClient(requireEnvStr(c.env, 'PUBLIC_URL'));
     const verified = await client.verify(subjects, accessToken);
     if (verified.err || verified.subject.type !== 'admin') {
       return c.json({ error: 'Unauthorized' }, 401);
@@ -146,7 +147,7 @@ authApi.post(
       expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
       tokenType: 'Bearer',
     };
-    await storeToken(c.env.TOKEN_STORE, pieceName, userId, record, c.env.TOKEN_ENCRYPTION_KEY);
+    await storeToken(requireKVBinding(c.env, 'TOKEN_STORE'), pieceName, userId, record, requireEnvStr(c.env, 'TOKEN_ENCRYPTION_KEY'));
     return c.json({ ok: true, piece: pieceName, userId });
   },
 );

@@ -12,6 +12,7 @@
 
 import { createMimeMessage } from 'mimetext';
 import type { Env } from '../framework/types';
+import { getEnvStr } from '../lib/env';
 
 /**
  * Build a plain-text + HTML verification code email.
@@ -54,8 +55,12 @@ function buildCodeEmail(senderEmail: string, recipientEmail: string, code: strin
  * When the EMAIL binding is not available (local dev), logs the code to console.
  */
 export async function sendVerificationEmail(env: Env, recipientEmail: string, code: string) {
-  const senderEmail = (env.AUTH_SENDER_EMAIL as string | undefined) ?? '';
-  const emailBinding = env.EMAIL as { send: (msg: unknown) => Promise<void> } | undefined;
+  const senderEmail = getEnvStr(env, 'AUTH_SENDER_EMAIL') ?? '';
+  const emailBinding = (
+    (env as Record<string, unknown>)['FREEPIECES_EMAIL'] ??
+    (env as Record<string, unknown>)['FP_EMAIL'] ??
+    (env as Record<string, unknown>)['EMAIL']
+  ) as { send: (msg: unknown) => Promise<void> } | undefined;
 
   if (!emailBinding || !senderEmail) {
     console.log(`[freepieces-auth] Verification code for ${recipientEmail}: ${code}`);

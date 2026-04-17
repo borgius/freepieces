@@ -7,6 +7,7 @@ import { timingSafeEqual } from './admin-session';
 import { resolveApRuntimeAuth } from './auth-resolve';
 import { buildApTriggerContext } from './ap-context';
 import type { Env, ApPiece } from '../framework/types';
+import { requireKVBinding } from './env';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,7 +122,7 @@ export async function dispatchWebhook(
   payload: unknown,
   env: Env,
 ): Promise<void> {
-  const subs = await listSubscriptions(env.TOKEN_STORE, pieceName);
+  const subs = await listSubscriptions(requireKVBinding(env, 'TOKEN_STORE'), pieceName);
   await Promise.allSettled(
     subs.map(async (sub) => {
       const triggerDef = getTrigger(pieceName, sub.trigger);

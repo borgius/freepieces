@@ -13,6 +13,7 @@
 
 import type { OAuth2AuthDefinition, OAuthTokenRecord, Env } from '../framework/types';
 import { storeToken } from './token-store';
+import { getEnvStr, requireEnvStr, requireKVBinding } from './env';
 
 // ---------------------------------------------------------------------------
 // State helpers
@@ -128,18 +129,18 @@ export async function buildLoginUrl(
   return `${auth.authorizationUrl}?${params.toString()}`;
 }
 
-/** Resolve the piece-specific OAuth client credentials from env. */
+/** Resolve the piece-specific OAuth client credentials from env.
+ * Checks FREEPIECES_<KEY>, FP_<KEY>, then <KEY> for each credential. */
 export function resolveOAuthClientCredentials(
   auth: OAuth2AuthDefinition,
   env: Env,
 ): { clientId: string; clientSecret: string } {
-  const envRecord = env as Record<string, unknown>;
-  const clientId = envRecord[auth.clientIdEnvKey];
-  const clientSecret = envRecord[auth.clientSecretEnvKey];
+  const clientId = getEnvStr(env, auth.clientIdEnvKey);
+  const clientSecret = getEnvStr(env, auth.clientSecretEnvKey);
 
   const missing = [
-    typeof clientId === 'string' && clientId.length > 0 ? null : auth.clientIdEnvKey,
-    typeof clientSecret === 'string' && clientSecret.length > 0 ? null : auth.clientSecretEnvKey,
+    clientId ? null : auth.clientIdEnvKey,
+    clientSecret ? null : auth.clientSecretEnvKey,
   ].filter((key): key is string => key !== null);
 
   if (missing.length > 0) {
@@ -172,7 +173,7 @@ export async function handleCallback(
   if (!code) throw new Error('Missing code parameter in callback');
   if (!rawState) throw new Error('Missing state parameter in callback');
 
-  const state = await decodeState(rawState, env.TOKEN_ENCRYPTION_KEY);
+  const state = await decodeState(rawState, requireEnvStr(env, 'TOKEN_ENCRYPTION_KEY'));
   if (!state) throw new Error('Invalid or tampered state parameter — possible CSRF attempt');
 
   const { clientId, clientSecret } = resolveOAuthClientCredentials(auth, env);
@@ -232,7 +233,7 @@ export async function handleCallback(
     }
   }
 
-  await storeToken(env.TOKEN_STORE, state.pieceName, userId, record, env.TOKEN_ENCRYPTION_KEY);
+  await storeToken(requireKVBinding(env, 'TOKEN_STORE'), state.pieceName, userId, record, requireEnvStr(env, 'TOKEN_ENCRYPTION_KEY'));
 
   return { userId, record, returnUrl: state.returnUrl };
 }
@@ -303,6 +304,6 @@ export async function refreshTokenIfNeeded(
     tokenType: data.token_type ?? record.tokenType ?? 'Bearer',
   };
 
-  await storeToken(env.TOKEN_STORE, pieceName, userId, fresh, env.TOKEN_ENCRYPTION_KEY);
+  await storeToken(requireKVBinding(env, 'TOKEN_STORE'), pieceName, userId, fresh, requireEnvStr(env, 'TOKEN_ENCRYPTION_KEY'));
   return fresh;
 }

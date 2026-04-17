@@ -17,6 +17,7 @@ import {
 import type { WebhookSubscription } from '../lib/webhook';
 import type { Env } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
+import { getEnvStr, requireKVBinding } from '../lib/env';
 
 const webhookApi = new Hono<{
   Bindings: Env;
@@ -36,9 +37,8 @@ webhookApi.post('/webhook/:piece', async (c) => {
   const rawBody = await c.req.text();
 
   // Verify Slack signature when the signing secret is configured
-  const envRecord = c.env as Record<string, string>;
   const signingSecretKey = `${pieceName.toUpperCase().replace(/-/g, '_')}_SIGNING_SECRET`;
-  const signingSecret = envRecord[signingSecretKey] as string | undefined;
+  const signingSecret = getEnvStr(c.env, signingSecretKey);
   if (signingSecret) {
     const timestamp = c.req.header('x-slack-request-timestamp') ?? '';
     const signature = c.req.header('x-slack-signature') ?? '';
@@ -135,9 +135,9 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
     ...(pieceAuthProps ? { pieceAuthProps } : {}),
     createdAt: new Date().toISOString(),
   };
-  await c.env.TOKEN_STORE.put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
+  await requireKVBinding(c.env, 'TOKEN_STORE').put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
 
-  const webhookUrl = `${c.env.FREEPIECES_PUBLIC_URL}/webhook/${pieceName}`;
+  const webhookUrl = `${getEnvStr(c.env, 'PUBLIC_URL')}/webhook/${pieceName}`;
   return c.json({ ok: true, id: subId, webhookUrl }, 201);
 });
 
@@ -145,7 +145,7 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
 webhookApi.get('/subscriptions/:piece', async (c) => {
   const pieceName = c.req.param('piece');
 
-  const allSubs = await listSubscriptions(c.env.TOKEN_STORE, pieceName);
+  const allSubs = await listSubscriptions(requireKVBinding(c.env, 'TOKEN_STORE'), pieceName);
   const mine = allSubs
     .filter((s) => sameSubscriptionOwner(s, c.var.credentials))
     .map((s) => ({
@@ -164,7 +164,7 @@ webhookApi.delete('/subscriptions/:piece/:trigger/:id', async (c) => {
   const pieceName = c.req.param('piece');
   const subDelId = c.req.param('id');
 
-  const rawSub = await c.env.TOKEN_STORE.get(SUB_KEY(pieceName, subDelId));
+  const rawSub = await requireKVBinding(c.env, 'TOKEN_STORE').get(SUB_KEY(pieceName, subDelId));
   if (!rawSub) return c.json({ error: 'Subscription not found' }, 404);
 
   const existingSub = JSON.parse(rawSub) as WebhookSubscription;
@@ -172,7 +172,7 @@ webhookApi.delete('/subscriptions/:piece/:trigger/:id', async (c) => {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  await c.env.TOKEN_STORE.delete(SUB_KEY(pieceName, subDelId));
+  await requireKVBinding(c.env, 'TOKEN_STORE').delete(SUB_KEY(pieceName, subDelId));
   return c.json({ ok: true, id: subDelId });
 });
 

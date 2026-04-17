@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { resolveRuntimeRequestAuth, type RuntimeRequestCredentials } from './request-auth';
+import { getEnvStr } from './env';
 import type { Env } from '../framework/types';
 
 /**
@@ -20,7 +21,7 @@ export const runtimeAuth = createMiddleware<{
 }>(async (c, next) => {
   const result = await resolveRuntimeRequestAuth(
     c.req.raw.headers,
-    c.env.RUN_API_KEY,
+    getEnvStr(c.env, 'RUN_API_KEY'),
     new URL(c.req.url).origin,
   );
   if (!result.ok) {

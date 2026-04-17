@@ -20,10 +20,10 @@
  *   FREEPIECES_PIECE_TOKEN Direct runtime piece credential for API-key/CUSTOM_AUTH pieces
  */
 
-const BASE_URL = process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
-const RUN_API_KEY = process.env['RUN_API_KEY'] ?? '';
-const USER_ID = process.env['FREEPIECES_USER_ID'] ?? process.env['USER_ID'] ?? '';
-const PIECE_TOKEN = process.env['FREEPIECES_PIECE_TOKEN'] ?? '';
+const BASE_URL = process.env['FREEPIECES_URL'] ?? process.env['FP_URL'] ?? 'http://localhost:9321';
+const RUN_API_KEY = process.env['FREEPIECES_RUN_API_KEY'] ?? process.env['FP_RUN_API_KEY'] ?? process.env['RUN_API_KEY'] ?? '';
+const USER_ID = process.env['FREEPIECES_USER_ID'] ?? process.env['FP_USER_ID'] ?? process.env['USER_ID'] ?? '';
+const PIECE_TOKEN = process.env['FREEPIECES_PIECE_TOKEN'] ?? process.env['FP_PIECE_TOKEN'] ?? '';
 
 async function callAction(
   pieceName: string,

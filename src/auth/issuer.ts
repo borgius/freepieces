@@ -19,6 +19,7 @@ import { CloudflareStorage } from '@openauthjs/openauth/storage/cloudflare';
 import { subjects } from './subjects';
 import type { Env } from '../framework/types';
 import { sendVerificationEmail } from './email';
+import { getEnvStr, getKVBinding } from '../lib/env';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,15 +38,15 @@ function parseEmailList(value: string | undefined): Set<string> {
 
 /** Check if an email is allowed to register (invite-only). */
 function isEmailAllowed(email: string, env: Env): boolean {
-  const adminEmails = parseEmailList(env.ADMIN_EMAILS as string | undefined);
-  const allowedEmails = parseEmailList(env.ALLOWED_EMAILS as string | undefined);
+  const adminEmails = parseEmailList(getEnvStr(env, 'ADMIN_EMAILS'));
+  const allowedEmails = parseEmailList(getEnvStr(env, 'ALLOWED_EMAILS'));
   const normalised = email.toLowerCase();
   return adminEmails.has(normalised) || allowedEmails.has(normalised);
 }
 
 /** Check if an email is an admin. */
 function isAdmin(email: string, env: Env): boolean {
-  const adminEmails = parseEmailList(env.ADMIN_EMAILS as string | undefined);
+  const adminEmails = parseEmailList(getEnvStr(env, 'ADMIN_EMAILS'));
   return adminEmails.has(email.toLowerCase());
 }
 
@@ -112,7 +113,7 @@ export function createAuthIssuer(env: Env) {
   return issuer({
     providers,
     subjects,
-    storage: CloudflareStorage({ namespace: env.AUTH_STORE as any }),
+    storage: CloudflareStorage({ namespace: getKVBinding(env, 'AUTH_STORE') as any }),
     allow: async () => true, // embedded issuer — all clients are trusted
     async success(ctx, value) {
       let email: string | undefined;
