@@ -106,6 +106,15 @@ export interface Env {
   FP_GITHUB_CLIENT_SECRET?: string;
   GITHUB_CLIENT_SECRET?: string;
 
+  // ── Worker name (for admin UI command hints) ────────────────────────────────
+  /**
+   * Cloudflare Worker name — used to render correct `wrangler secret put X --name <name>`
+   * commands in the admin Settings › Secrets panel.
+   * Set as a [vars] entry in wrangler.toml: FREEPIECES_WORKER_NAME = "my-worker"
+   */
+  FREEPIECES_WORKER_NAME?: string;
+  FP_WORKER_NAME?: string;
+
   // ── Cloudflare Queue / static-assets bindings ─────────────────────────────
   /** Cloudflare Queue for async trigger processing. */
   TRIGGER_QUEUE?: Queue;

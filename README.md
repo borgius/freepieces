@@ -325,6 +325,55 @@ Compat OAuth pieces should name their secrets explicitly too. Only direct `regis
 
 ---
 
+## Use as a library
+
+`freepieces` can also be consumed as an npm package from another project. This lets you deploy your own Cloudflare Worker with custom pieces without forking this repo.
+
+```bash
+npm install freepieces hono
+```
+
+### Subpath exports
+
+| Import | What you get |
+| --- | --- |
+| `freepieces/worker` | `createFreepiecesWorker()` — returns `{ fetch, queue }` |
+| `freepieces/framework` | `registerPiece`, `registerApPiece`, `createPiece`, types (`Env`, `PieceDefinition`, `ApPiece`, …) |
+| `freepieces/sdk` | TypeScript SDK client (unchanged) |
+| `freepieces/admin-assets` | Path to the compiled admin SPA (`dist/public/`) |
+
+### Minimal consumer worker
+
+```ts
+// src/worker.ts
+import { createFreepiecesWorker } from 'freepieces/worker';
+import './pieces/index.js';   // registers your pieces as side effects
+
+export default createFreepiecesWorker();
+```
+
+```ts
+// src/pieces/index.ts
+import { registerApPiece } from 'freepieces/framework';
+import type { ApPiece } from 'freepieces/framework';
+import airtablePkg from '@activepieces/piece-airtable';
+
+registerApPiece('airtable', (airtablePkg as unknown as { airtable: ApPiece }).airtable);
+```
+
+```toml
+# wrangler.toml — point [assets] at the package's compiled admin SPA
+[assets]
+directory = "./node_modules/freepieces/dist/public"
+binding = "ASSETS"
+```
+
+A working minimal example lives in [`examples/consumer-worker/`](examples/consumer-worker/).
+
+> **Important:** ensure only one copy of `freepieces` is resolved in your project. The piece registry is module-global; if two copies exist the pieces registered before `createFreepiecesWorker()` will be invisible at runtime.
+
+---
+
 ## Development
 
 ```bash

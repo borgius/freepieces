@@ -250,15 +250,36 @@ adminApi.delete('/pieces/:name/users/:userId', async (c) => {
   return c.json({ ok: true });
 });
 
+/** Append `--name <worker>` to a `wrangler secret put X` command when the name is known. */
+function withWorkerName(command: string, workerName: string | undefined): string {
+  if (!workerName || !command.startsWith('wrangler secret put ')) return command;
+  return `${command} --name ${workerName}`;
+}
+
+/** Derive worker name: explicit env var first, then extract subdomain from PUBLIC_URL. */
+function resolveWorkerName(env: Env): string | undefined {
+  const explicit = env.FREEPIECES_WORKER_NAME ?? env.FP_WORKER_NAME;
+  if (explicit) return explicit;
+  const publicUrl = env.FREEPIECES_PUBLIC_URL ?? env.FP_PUBLIC_URL ?? env.PUBLIC_URL;
+  if (!publicUrl) return undefined;
+  try {
+    const host = new URL(publicUrl).hostname; // e.g. my-worker.workers.dev
+    return host.split('.')[0]; // e.g. my-worker
+  } catch {
+    return undefined;
+  }
+}
+
 // GET /admin/api/secrets
 adminApi.get('/secrets', (c) => {
   const envRecord = c.env as Record<string, unknown>;
+  const workerName = resolveWorkerName(c.env);
   const global = GLOBAL_SECRET_DEFS.map((def) => ({
     key: def.key,
     displayName: def.displayName,
     description: def.description,
     required: def.required,
-    command: def.command,
+    command: withWorkerName(def.command, workerName),
     isSet: Boolean(envRecord[def.key]),
   }));
   const pieces = listPieces()
@@ -273,7 +294,7 @@ adminApi.get('/secrets', (c) => {
           ...group,
           secrets: group.secrets
             .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
-            .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
+            .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]), command: withWorkerName(s.command, workerName) })),
         }))
         .filter((group) => group.secrets.length > 0),
     }))

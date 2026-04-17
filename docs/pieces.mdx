@@ -536,3 +536,30 @@ If you want to trace the behavior in code, start here:
 - `docs/actions.mdx` — action behavior
 - `docs/triggers.mdx` — webhook and queue trigger behavior
 - `docs/pooling.mdx` — polling behavior
+
+## Registering pieces in a consumer project
+
+When you use `freepieces` as a library (see [Install — Use as a library](./install.mdx#use-as-a-library)), the piece registration workflow is the same as inside this repo.
+
+Import `registerPiece` or `registerApPiece` from `freepieces/framework` and call them before (or as a side effect of) importing your worker entrypoint:
+
+```ts
+// src/pieces/index.ts (consumer project)
+import { registerApPiece } from 'freepieces/framework';
+import type { ApPiece } from 'freepieces/framework';
+import airtablePkg from '@activepieces/piece-airtable';
+
+registerApPiece('airtable', (airtablePkg as unknown as { airtable: ApPiece }).airtable);
+```
+
+```ts
+// src/worker.ts (consumer project)
+import { createFreepiecesWorker } from 'freepieces/worker';
+import './pieces/index.js'; // registers your pieces as side effects
+
+export default createFreepiecesWorker();
+```
+
+The `fp install` CLI also works inside a consumer project that follows the same `src/pieces/index.ts` layout with `// @fp:pieces:start` / `// @fp:pieces:end` markers. Running `fp install @activepieces/piece-airtable` generates the wrapper file and updates the index automatically.
+
+The registry is module-global, so pieces registered in `./pieces/index.js` are visible to `createFreepiecesWorker()` — as long as both resolve the same `freepieces` package instance (keep it as a single dependency, not both a workspace dep and a transitive dep).

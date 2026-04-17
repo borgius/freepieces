@@ -1,7 +1,7 @@
 {
   "name": "freepieces",
   "private": false,
-  "version": "0.1.6",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -12,27 +12,50 @@
     "./sdk": {
       "import": "./dist/sdk/index.js",
       "types": "./dist/sdk/index.d.ts"
-    }
+    },
+    "./framework": {
+      "import": "./dist/framework/index.js",
+      "types": "./dist/framework/index.d.ts"
+    },
+    "./worker": {
+      "import": "./dist/worker/index.js",
+      "types": "./dist/worker/worker/index.d.ts"
+    },
+    "./admin-assets": "./dist/public/"
   },
   "main": "./dist/sdk/index.js",
   "types": "./dist/sdk/index.d.ts",
   "files": [
-    "dist/sdk"
+    "dist/sdk",
+    "dist/framework",
+    "dist/worker",
+    "dist/cli",
+    "dist/public",
+    "wrangler.toml.tmpl"
   ],
   "bin": {
     "fp": "dist/cli/bin.js",
     "freepieces": "dist/cli/bin.js"
   },
+  "peerDependencies": {
+    "hono": "^4.0.0",
+    "@openauthjs/openauth": "^0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@openauthjs/openauth": { "optional": true }
+  },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "bash scripts/dev.sh",
     "dev:admin": "vite --config vite.config.admin.ts",
-    "build": "tsc --noEmit && vite build && pnpm run build:admin && pnpm run build:cli && pnpm run build:sdk",
+    "build": "tsc --noEmit && vite build && pnpm run build:admin && pnpm run build:cli && pnpm run build:sdk && pnpm run build:framework && pnpm run build:worker",
     "build:sdk": "tsc --project tsconfig.sdk.json",
+    "build:framework": "tsc --project tsconfig.framework.json",
+    "build:worker": "rm -rf dist/worker && tsc --project tsconfig.worker.json && vite build --config vite.config.worker.ts",
     "build:admin": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.admin.ts",
     "build:ghpages": "tsc --noEmit --project tsconfig.admin.json && vite build --config vite.config.ghpages.ts && cp dist/ghpages/index.html dist/ghpages/404.html",
     "build:cli": "tsc --project tsconfig.cli.json && chmod +x dist/cli/bin.js",
-    "check": "tsc --noEmit && tsc --noEmit --project tsconfig.client.json && tsc --noEmit --project tsconfig.admin.json && tsc --noEmit --project tsconfig.sdk.json",
+    "check": "tsc --noEmit && tsc --noEmit --project tsconfig.client.json && tsc --noEmit --project tsconfig.admin.json && tsc --noEmit --project tsconfig.sdk.json && tsc --noEmit --project tsconfig.framework.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

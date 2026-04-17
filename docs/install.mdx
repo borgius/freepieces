@@ -313,3 +313,56 @@ bash scripts/install.sh --help
 - [Actions](./actions.mdx) — how to run actions
 - [Triggers](./triggers.mdx) — webhook and queue triggers
 - [Polling triggers](./pooling.mdx) — polling triggers such as Gmail
+
+## Use as a library
+
+`freepieces` exposes two subpath exports for downstream projects that want to deploy their own Cloudflare Worker with custom pieces, without forking this repo.
+
+### Subpath exports
+
+| Import path | Purpose |
+| --- | --- |
+| `freepieces/worker` | `createFreepiecesWorker()` factory that returns `{ fetch, queue }` |
+| `freepieces/framework` | `registerPiece`, `registerApPiece`, `createPiece`, `getPiece`, `listPieces`, types |
+
+### Quickstart
+
+In your consumer project:
+
+```bash
+npm install freepieces hono
+# or: pnpm add freepieces hono
+```
+
+Write your worker entrypoint:
+
+```ts
+// src/worker.ts
+import { createFreepiecesWorker } from 'freepieces/worker';
+import './pieces/index.js';
+
+export default createFreepiecesWorker();
+```
+
+Register your pieces:
+
+```ts
+// src/pieces/index.ts
+import { registerApPiece } from 'freepieces/framework';
+import type { ApPiece } from 'freepieces/framework';
+import airtablePkg from '@activepieces/piece-airtable';
+
+registerApPiece('airtable', (airtablePkg as unknown as { airtable: ApPiece }).airtable);
+```
+
+Point your `wrangler.toml` at the admin SPA that ships inside the package:
+
+```toml
+[assets]
+directory = "./node_modules/freepieces/dist/public"
+binding = "ASSETS"
+```
+
+You can also use the `fp install` CLI inside your consumer project — it writes the same piece wrapper files and updates your `src/pieces/index.ts` automatically.
+
+A complete example lives in [examples/consumer-worker](../examples/consumer-worker/).
