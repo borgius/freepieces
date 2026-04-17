@@ -143,28 +143,34 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
 
               {/* Secret rows */}
               <VStack align="stretch" gap={1.5}>
-                {group.secrets.map((s) => (
+                {group.secrets.map((s) => {
+                  const missingRequired = s.isSet === false && s.required;
+                  const missingOptional = s.isSet === false && !s.required;
+                  return (
                   <Box
                     key={s.key}
                     borderWidth="1px"
-                    borderColor="orange.100"
+                    borderColor={missingRequired ? 'red.100' : missingOptional ? 'yellow.200' : s.isSet === true ? 'green.100' : 'orange.100'}
                     rounded="md"
                     px={3}
                     py={2}
-                    bg="orange.50"
+                    bg={missingRequired ? 'red.50' : missingOptional ? 'yellow.50' : s.isSet === true ? 'green.50' : 'orange.50'}
                   >
                     <HStack gap={2} flexWrap="wrap">
-                      <Text fontSize="xs" fontWeight="medium" color="gray.800">
+                      <Text fontSize="xs" fontWeight="semibold" color="gray.800" fontFamily="mono">
+                        {s.key}
+                      </Text>
+                      <Text fontSize="xs" color="gray.600">
                         {s.displayName}
                       </Text>
                       {s.required ? (
-                        <Badge colorPalette="red" variant="subtle" fontSize="2xs">required</Badge>
+                        <Badge colorPalette="orange" variant="subtle" fontSize="2xs">required</Badge>
                       ) : (
                         <Badge colorPalette="gray" variant="subtle" fontSize="2xs">optional</Badge>
                       )}
                       {typeof s.isSet === 'boolean' && (
                         <Badge
-                          colorPalette={s.isSet ? 'green' : 'red'}
+                          colorPalette={s.isSet ? 'green' : s.required ? 'red' : 'yellow'}
                           variant="subtle"
                           fontSize="2xs"
                         >
@@ -196,7 +202,8 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
                       </Text>
                     )}
                   </Box>
-                ))}
+                  );
+                })}
               </VStack>
             </Box>
           ))}
