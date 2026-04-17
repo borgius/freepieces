@@ -28,11 +28,22 @@ import { requireEnvStr, requireKVBinding } from '../lib/env';
  * well-known, authorize) directly to the embedded issuer Hono app instead of
  * making outbound subrequests. Cloudflare Workers cannot reliably fetch their
  * own URL — this keeps all JWT-related calls fully in-process.
+ *
+ * The issuer app is cached per KV namespace instance so that the lazy()
+ * signing-key scan (KV LIST + KV GETs) is paid only once per Worker isolate
+ * lifetime rather than on every request.
  */
+const issuerAppCache = new WeakMap<object, ReturnType<typeof createAuthIssuer>>();
+
 function makeIssuerFetch(env: Env): typeof fetch {
-  const issuerApp = createAuthIssuer(env);
+  const kvKey = env.FREEPIECES_AUTH_STORE ?? env.FP_AUTH_STORE ?? env.AUTH_STORE ?? env;
+  let issuerApp = issuerAppCache.get(kvKey as object);
+  if (!issuerApp) {
+    issuerApp = createAuthIssuer(env);
+    issuerAppCache.set(kvKey as object, issuerApp);
+  }
   return ((input: RequestInfo | URL, init?: RequestInit) =>
-    issuerApp.fetch(new Request(input, init))) as typeof fetch;
+    issuerApp!.fetch(new Request(input, init))) as typeof fetch;
 }
 
 const COOKIE_NAME = '__fp_admin';
@@ -46,8 +57,16 @@ const adminApi = new Hono<{
 // ── Auth callback — exchanges OpenAuth code for tokens ──────────────────
 
 adminApi.get('/callback', async (c) => {
+  // OpenAuth redirects here with ?error=... when something goes wrong (e.g. email send failure).
+  // Redirect back to the login page rather than showing raw JSON.
+  const oauthError = c.req.query('error');
+  if (oauthError) {
+    const desc = c.req.query('error_description') ?? oauthError;
+    return c.redirect(`/admin/?auth_error=${encodeURIComponent(desc)}`);
+  }
+
   const code = c.req.query('code');
-  if (!code) return c.json({ error: 'Missing code parameter' }, 400);
+  if (!code) return c.redirect('/admin/');
 
   const origin = new URL(c.req.url).origin;
   const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;

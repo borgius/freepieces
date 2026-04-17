@@ -16,13 +16,23 @@ import type { Env } from '../framework/types';
  *
  * Throws HTTPException(401) when authentication fails.
  */
+
+// Cache the issuer app per KV namespace instance to avoid re-scanning signing
+// keys from KV on every request.
+const issuerAppCache = new WeakMap<object, ReturnType<typeof createAuthIssuer>>();
+
 export const runtimeAuth = createMiddleware<{
   Bindings: Env;
   Variables: { credentials: RuntimeRequestCredentials };
 }>(async (c, next) => {
-  const issuerApp = createAuthIssuer(c.env);
+  const kvKey = c.env.FREEPIECES_AUTH_STORE ?? c.env.FP_AUTH_STORE ?? c.env.AUTH_STORE ?? c.env;
+  let issuerApp = issuerAppCache.get(kvKey as object);
+  if (!issuerApp) {
+    issuerApp = createAuthIssuer(c.env);
+    issuerAppCache.set(kvKey as object, issuerApp);
+  }
   const issuerFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    issuerApp.fetch(new Request(input, init))) as typeof fetch;
+    issuerApp!.fetch(new Request(input, init))) as typeof fetch;
 
   const result = await resolveRuntimeRequestAuth(
     c.req.raw.headers,
