@@ -10,7 +10,7 @@ import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
-import { createAuthIssuer } from '../auth/issuer';
+import { makeIssuerFetch } from '../lib/auth-issuer';
 import {
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
@@ -23,27 +23,25 @@ import {
 import type { Env } from '../framework/types';
 import { requireEnvStr, requireKVBinding } from '../lib/env';
 
-/**
- * Returns a fetch function that routes OpenAuth issuer requests (token, jwks,
- * well-known, authorize) directly to the embedded issuer Hono app instead of
- * making outbound subrequests. Cloudflare Workers cannot reliably fetch their
- * own URL — this keeps all JWT-related calls fully in-process.
- *
- * The issuer app is cached per KV namespace instance so that the lazy()
- * signing-key scan (KV LIST + KV GETs) is paid only once per Worker isolate
- * lifetime rather than on every request.
- */
-const issuerAppCache = new WeakMap<object, ReturnType<typeof createAuthIssuer>>();
+const authClientCache = new WeakMap<object, ReturnType<typeof createAuthClient>>();
 
-function makeIssuerFetch(env: Env): typeof fetch {
-  const kvKey = env.FREEPIECES_AUTH_STORE ?? env.FP_AUTH_STORE ?? env.AUTH_STORE ?? env;
-  let issuerApp = issuerAppCache.get(kvKey as object);
-  if (!issuerApp) {
-    issuerApp = createAuthIssuer(env);
-    issuerAppCache.set(kvKey as object, issuerApp);
+/**
+ * Returns a cached OpenAuth client per KV namespace instance (i.e. per isolate).
+ * Reusing the client preserves the in-memory jwksCache and issuerCache inside
+ * createClient(), so JWKS/well-known fetches happen only once per isolate lifetime
+ * instead of on every authenticated request.
+ */
+function getAuthClient(env: Env, origin: string): ReturnType<typeof createAuthClient> {
+  const kvKey = (env as Record<string, unknown>)['FREEPIECES_AUTH_STORE']
+    ?? (env as Record<string, unknown>)['FP_AUTH_STORE']
+    ?? (env as Record<string, unknown>)['AUTH_STORE']
+    ?? env;
+  let client = authClientCache.get(kvKey as object);
+  if (!client) {
+    client = createAuthClient(origin, makeIssuerFetch(env));
+    authClientCache.set(kvKey as object, client);
   }
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
-    issuerApp!.fetch(new Request(input, init))) as typeof fetch;
+  return client;
 }
 
 const COOKIE_NAME = '__fp_admin';
@@ -70,7 +68,7 @@ adminApi.get('/callback', async (c) => {
 
   const origin = new URL(c.req.url).origin;
   const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;
-  const client = createAuthClient(origin, makeIssuerFetch(c.env));
+  const client = getAuthClient(c.env, origin);
   const exchanged = await client.exchange(code, redirectUri);
   if (exchanged.err) {
     return c.json({ error: 'Token exchange failed' }, 401);
@@ -123,10 +121,14 @@ adminApi.use('*', async (c, next) => {
   const refreshToken = getCookie(c, REFRESH_COOKIE);
   if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
 
-  const client = createAuthClient(new URL(c.req.url).origin, makeIssuerFetch(c.env));
+  const t0 = Date.now();
+  const client = getAuthClient(c.env, new URL(c.req.url).origin);
+  const t1 = Date.now();
   const verified = await client.verify(subjects, accessToken, {
     refresh: refreshToken,
   });
+  const t2 = Date.now();
+  console.log(`[admin-auth] getAuthClient=${t1 - t0}ms verify=${t2 - t1}ms total=${t2 - t0}ms path=${c.req.path}`);
   if (verified.err) return c.json({ error: 'Unauthorized' }, 401);
 
   if (verified.subject.type !== 'admin') {
@@ -181,6 +183,7 @@ adminApi.get('/login-url', (c) => {
 adminApi.get('/pieces', async (c) => {
   const all = listPieces();
   const envRecord = c.env as Record<string, unknown>;
+  const workerName = resolveWorkerName(c.env);
   const result = await Promise.all(
     all.map(async (p) => ({
       name: p.name,
@@ -209,7 +212,7 @@ adminApi.get('/pieces', async (c) => {
           ...group,
           secrets: group.secrets
             .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
-            .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]) })),
+            .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]), command: withWorkerName(s.command, workerName) })),
         }))
         .filter((group) => group.secrets.length > 0),
       supportsUsers: pieceSupportsStoredUsers(p.auth),

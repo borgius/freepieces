@@ -12,7 +12,7 @@
  */
 
 import { Hono } from 'hono';
-import { createAuthIssuer } from '../auth/issuer';
+import { getIssuerApp } from '../lib/auth-issuer';
 import type { Env } from '../framework/types';
 
 const openauthApi = new Hono<{ Bindings: Env }>();
@@ -25,7 +25,7 @@ function toIssuerRequest(rawRequest: Request, path: string): Request {
 
 // ── OpenAuth SPA (admin login UI) ───────────────────────────────────────
 openauthApi.all('/oa/*', async (c) => {
-  const issuerApp = createAuthIssuer(c.env);
+  const issuerApp = getIssuerApp(c.env);
   const requestOrigin = new URL(c.req.url).origin;
   // Strip /oa prefix so OpenAuth sees routes at /
   const path = c.req.path.replace(/^\/oa/, '') || '/';
@@ -51,35 +51,25 @@ openauthApi.all('/oa/*', async (c) => {
 // OpenAuth constructs redirect_uri as {origin}/google/callback (no /oa prefix).
 // These routes catch Google/GitHub callbacks and forward them to the issuer.
 openauthApi.all('/:provider/callback', (c) => {
-  const issuerApp = createAuthIssuer(c.env);
-  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
+  return getIssuerApp(c.env).fetch(toIssuerRequest(c.req.raw, c.req.path));
 });
 
 // ── OpenID Connect discovery & token endpoints ──────────────────────────
 openauthApi.all('/.well-known/*', (c) => {
-  const issuerApp = createAuthIssuer(c.env);
-  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
+  return getIssuerApp(c.env).fetch(toIssuerRequest(c.req.raw, c.req.path));
 });
 
 openauthApi.all('/jwks', (c) => {
-  const issuerApp = createAuthIssuer(c.env);
-  return issuerApp.fetch(toIssuerRequest(c.req.raw, '/jwks'));
+  return getIssuerApp(c.env).fetch(toIssuerRequest(c.req.raw, '/jwks'));
 });
 
 openauthApi.all('/token', (c) => {
-  const issuerApp = createAuthIssuer(c.env);
-  return issuerApp.fetch(toIssuerRequest(c.req.raw, '/token'));
+  return getIssuerApp(c.env).fetch(toIssuerRequest(c.req.raw, '/token'));
 });
 
 // ── OAuth provider callbacks (arrive directly from Google/GitHub) ───────
-openauthApi.all('/:provider/callback', (c) => {
-  const issuerApp = createAuthIssuer(c.env);
-  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
-});
-
 openauthApi.all('/:provider/authorize', (c) => {
-  const issuerApp = createAuthIssuer(c.env);
-  return issuerApp.fetch(toIssuerRequest(c.req.raw, c.req.path));
+  return getIssuerApp(c.env).fetch(toIssuerRequest(c.req.raw, c.req.path));
 });
 
 export default openauthApi;

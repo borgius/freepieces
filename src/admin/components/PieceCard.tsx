@@ -178,24 +178,26 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
                         </Badge>
                       )}
                     </HStack>
-                    <HStack gap={1} mt={1} align="center">
-                      <Code fontSize="xs" colorPalette="orange" variant="surface" px={1.5} py={0.5}>
-                        {s.command}
-                      </Code>
-                      <ClipboardRoot value={s.command} timeout={1500}>
-                        <ClipboardTrigger asChild>
-                          <Box
-                            as="button"
-                            color="gray.400"
-                            _hover={{ color: 'orange.500' }}
-                            flexShrink={0}
-                            title="Copy command"
-                          >
-                            <Copy size={12} />
-                          </Box>
-                        </ClipboardTrigger>
-                      </ClipboardRoot>
-                    </HStack>
+                    {!s.isSet && (
+                      <HStack gap={1} mt={1} align="center">
+                        <Code fontSize="xs" colorPalette="orange" variant="surface" px={1.5} py={0.5}>
+                          {s.command}
+                        </Code>
+                        <ClipboardRoot value={s.command} timeout={1500}>
+                          <ClipboardTrigger asChild>
+                            <Box
+                              as="button"
+                              color="gray.400"
+                              _hover={{ color: 'orange.500' }}
+                              flexShrink={0}
+                              title="Copy command"
+                            >
+                              <Copy size={12} />
+                            </Box>
+                          </ClipboardTrigger>
+                        </ClipboardRoot>
+                      </HStack>
+                    )}
                     {s.description && (
                       <Text fontSize="xs" color="gray.500" mt={0.5}>
                         {s.description}

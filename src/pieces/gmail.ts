@@ -436,6 +436,129 @@ async function searchMail(ctx: PieceActionContext): Promise<unknown> {
   return { found: true, results: { messages: detailed, count: detailed.length } };
 }
 
+async function getMails(ctx: PieceActionContext): Promise<unknown> {
+  const tok = getToken(ctx.auth);
+  const p = ctx.props as Record<string, unknown>;
+
+  const qParts: string[] = [];
+  if ((p.from as string)?.trim()) qParts.push(`from:(${(p.from as string).trim()})`);
+  if ((p.to as string)?.trim()) qParts.push(`to:(${(p.to as string).trim()})`);
+  if ((p.subject as string)?.trim()) qParts.push(`subject:(${(p.subject as string).trim()})`);
+  if ((p.content as string)?.trim()) qParts.push(`"${(p.content as string).trim()}"`);
+  if (p.has_attachment) qParts.push('has:attachment');
+  if ((p.attachment_name as string)?.trim()) qParts.push(`filename:(${(p.attachment_name as string).trim()})`);
+  if ((p.label as { name: string } | undefined)?.name) qParts.push(`label:${(p.label as { name: string }).name}`);
+  if ((p.category as string)?.trim()) qParts.push(`category:${(p.category as string).trim()}`);
+  if (p.after_date) {
+    const afterSec = Math.floor(new Date(p.after_date as string).getTime() / 1000);
+    qParts.push(`after:${afterSec}`);
+  }
+  if (p.before_date) {
+    const beforeSec = Math.floor(new Date(p.before_date as string).getTime() / 1000);
+    qParts.push(`before:${beforeSec}`);
+  }
+
+  const limit = Math.min(Math.max((p.limit as number) || 10, 1), 500);
+  const q = qParts.join(' ');
+  const qs = new URLSearchParams({ maxResults: String(limit) });
+  if (q) qs.set('q', q);
+  if (p.include_spam_trash) qs.set('includeSpamTrash', 'true');
+
+  const res = await gmailFetch(tok, `/users/me/messages?${qs}`) as { messages?: Array<{ id: string }> };
+  const ids = res.messages ?? [];
+
+  if (!ids.length) return { messages: [], count: 0, hasMore: false, nextPageCursor: null };
+
+  const rawMessages = await Promise.all(
+    ids.map(async ({ id }) => {
+      try {
+        return await gmailFetch(tok, `/users/me/messages/${id}?format=full`) as Record<string, unknown>;
+      } catch {
+        return { id, error: 'Failed to retrieve message details' } as Record<string, unknown>;
+      }
+    })
+  );
+
+  const detailed = rawMessages.map(msg => msg['error'] ? msg : parseFullMessage(msg));
+
+  // Oldest internalDate becomes the cursor for the next batch
+  let oldestMs: number | null = null;
+  for (const msg of rawMessages) {
+    if (msg['internalDate']) {
+      const t = Number(msg['internalDate']);
+      if (oldestMs === null || t < oldestMs) oldestMs = t;
+    }
+  }
+
+  return {
+    messages: detailed,
+    count: detailed.length,
+    hasMore: detailed.length === limit,
+    nextPageCursor: oldestMs !== null ? new Date(oldestMs).toISOString() : null,
+  };
+}
+
+async function getThreads(ctx: PieceActionContext): Promise<unknown> {
+  const tok = getToken(ctx.auth);
+  const p = ctx.props as Record<string, unknown>;
+
+  const qParts: string[] = [];
+  if ((p.from as string)?.trim()) qParts.push(`from:(${(p.from as string).trim()})`);
+  if ((p.to as string)?.trim()) qParts.push(`to:(${(p.to as string).trim()})`);
+  if ((p.subject as string)?.trim()) qParts.push(`subject:(${(p.subject as string).trim()})`);
+  if ((p.content as string)?.trim()) qParts.push(`"${(p.content as string).trim()}"`);
+  if (p.has_attachment) qParts.push('has:attachment');
+  if ((p.label as { name: string } | undefined)?.name) qParts.push(`label:${(p.label as { name: string }).name}`);
+  if ((p.category as string)?.trim()) qParts.push(`category:${(p.category as string).trim()}`);
+  if (p.after_date) {
+    const afterSec = Math.floor(new Date(p.after_date as string).getTime() / 1000);
+    qParts.push(`after:${afterSec}`);
+  }
+  if (p.before_date) {
+    const beforeSec = Math.floor(new Date(p.before_date as string).getTime() / 1000);
+    qParts.push(`before:${beforeSec}`);
+  }
+
+  const limit = Math.min(Math.max((p.limit as number) || 10, 1), 500);
+  const q = qParts.join(' ');
+  const qs = new URLSearchParams({ maxResults: String(limit) });
+  if (q) qs.set('q', q);
+  if (p.include_spam_trash) qs.set('includeSpamTrash', 'true');
+
+  const res = await gmailFetch(tok, `/users/me/threads?${qs}`) as { threads?: Array<{ id: string }> };
+  const ids = res.threads ?? [];
+
+  if (!ids.length) return { threads: [], count: 0, hasMore: false, nextPageCursor: null };
+
+  const rawThreads = await Promise.all(
+    ids.map(async ({ id }) => {
+      try {
+        return await gmailFetch(tok, `/users/me/threads/${id}?format=full`) as Record<string, unknown>;
+      } catch {
+        return { id, error: 'Failed to retrieve thread details' } as Record<string, unknown>;
+      }
+    })
+  );
+
+  // Oldest internalDate across all messages in all threads becomes the cursor
+  let oldestMs: number | null = null;
+  for (const thread of rawThreads) {
+    for (const msg of (thread['messages'] as Array<{ internalDate?: string }> | undefined) ?? []) {
+      if (msg.internalDate) {
+        const t = Number(msg.internalDate);
+        if (oldestMs === null || t < oldestMs) oldestMs = t;
+      }
+    }
+  }
+
+  return {
+    threads: rawThreads,
+    count: rawThreads.length,
+    hasMore: rawThreads.length === limit,
+    nextPageCursor: oldestMs !== null ? new Date(oldestMs).toISOString() : null,
+  };
+}
+
 async function customApiCall(ctx: PieceActionContext): Promise<unknown> {
   const tok = getToken(ctx.auth);
   const p = ctx.props as Record<string, unknown>;
@@ -745,6 +868,8 @@ export const gmailPiece = createPiece({
     { name: 'create_draft_reply', displayName: 'Create Draft Reply', description: 'Creates a draft reply to an existing email.', run: createDraftReply },
     { name: 'gmail_get_mail', displayName: 'Get Email', description: 'Get an email via Id.', run: getMail },
     { name: 'gmail_get_thread', displayName: 'Get Thread', description: 'Get a Gmail thread and all its messages via thread Id.', run: getThread },
+    { name: 'gmail_get_mails', displayName: 'Get Emails', description: 'Fetch a batch of emails with filters. Use nextPageCursor as before_date to page through results.', run: getMails },
+    { name: 'gmail_get_threads', displayName: 'Get Threads', description: 'Fetch a batch of threads with filters. Use nextPageCursor as before_date to page through results.', run: getThreads },
     { name: 'gmail_search_mail', displayName: 'Find Email', description: 'Find emails using advanced search criteria.', run: searchMail },
     { name: 'custom_api_call', displayName: 'Custom API Call', description: 'Make a custom authenticated call to the Gmail API.', run: customApiCall },
   ],
