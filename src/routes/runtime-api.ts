@@ -8,7 +8,7 @@ import { timeout } from 'hono/timeout';
 import { getPiece, getTrigger } from '../framework/registry';
 import { runtimeAuth } from '../lib/runtime-auth-middleware';
 import { buildApContext, buildApTriggerContext } from '../lib/ap-context';
-import { resolveNativeRuntimeAuth, resolveApRuntimeAuth } from '../lib/auth-resolve';
+import { resolveNativeRuntimeAuth, resolveApRuntimeAuth, forceRefreshNativeAuth } from '../lib/auth-resolve';
 import type { Env, PieceTriggerContext } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
 
@@ -57,7 +57,18 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
       auth = await resolveNativeRuntimeAuth(pieceName, piece.auth, c.env, userId, pieceToken);
       if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
 
-      result = await action.run({ auth, props, env: c.env });
+      result = await action.run({
+        auth,
+        props,
+        env: c.env,
+        refreshAuth: async () => {
+          const refreshed = await forceRefreshNativeAuth(pieceName, piece.auth, c.env, userId);
+          if (!refreshed) return undefined;
+          // Merge piece-supplied auth props (e.g. CUSTOM_AUTH extras) the same
+          // way the initial resolution did, so the action sees a consistent shape.
+          return pieceAuthProps ? { ...refreshed, ...pieceAuthProps } : refreshed;
+        },
+      });
 
     } else {
       const { piece } = stored;
@@ -115,6 +126,11 @@ runtimeApi.post('/trigger/:piece/:trigger', async (c) => {
           ? (body as Record<string, unknown>).lastPollMs as number
           : 0,
         env: c.env,
+        refreshAuth: async () => {
+          const refreshed = await forceRefreshNativeAuth(pieceName, stored.def.auth, c.env, userId);
+          if (!refreshed) return undefined;
+          return pieceAuthProps ? { ...refreshed, ...pieceAuthProps } : refreshed;
+        },
       };
       const events = await nativeTrigger.run(nativeCtx);
       return c.json({ ok: true, events });

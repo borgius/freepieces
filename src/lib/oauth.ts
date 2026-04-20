@@ -123,7 +123,8 @@ export async function buildLoginUrl(
     client_id: options.clientId,
     redirect_uri: options.callbackUrl,
     scope: auth.scopes.join(' '),
-    state
+    state,
+    ...auth.additionalParams,
   });
 
   return `${auth.authorizationUrl}?${params.toString()}`;
@@ -250,21 +251,29 @@ const REFRESH_THRESHOLD_MS = 15 * 60 * 1000;
  * refresh_token, exchange it for a new access token, persist the updated
  * record to KV, and return the fresh record.
  *
+ * Pass `force: true` to bypass the freshness check — used by the runtime
+ * after an upstream API rejects the access token with 401, so the user is
+ * never asked to re-auth while a valid refresh_token still exists.
+ *
  * Returns the original record unchanged when:
- *   • no expiresAt is stored (non-expiring token, e.g. plain bot token)
- *   • token is still valid and not near expiry
  *   • no refresh_token is present (token is simply gone — caller must re-auth)
+ *   • token is still valid and not near expiry (and not forced)
+ *   • record has no expiresAt and no refresh_token (non-expiring bot token)
  */
 export async function refreshTokenIfNeeded(
   record: OAuthTokenRecord,
   auth: OAuth2AuthDefinition,
   env: Env,
   pieceName: string,
-  userId: string
+  userId: string,
+  options: { force?: boolean } = {},
 ): Promise<OAuthTokenRecord> {
-  if (!record.expiresAt) return record;                              // non-expiring
-  if (Date.now() + REFRESH_THRESHOLD_MS < record.expiresAt) return record; // still fresh
   if (!record.refreshToken) return record;                           // can't refresh
+  if (!options.force) {
+    // Treat missing expiresAt as "unknown — assume still valid" only when not forced.
+    if (!record.expiresAt) return record;                            // non-expiring
+    if (Date.now() + REFRESH_THRESHOLD_MS < record.expiresAt) return record; // still fresh
+  }
 
   const { clientId, clientSecret } = resolveOAuthClientCredentials(auth, env);
 

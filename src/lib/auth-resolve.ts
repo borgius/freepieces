@@ -62,6 +62,55 @@ export async function resolveNativeRuntimeAuth(
 }
 
 /**
+ * Force-refresh the OAuth2 access token for a freepieces native piece and
+ * return updated runtime auth credentials. Returns `undefined` when the piece
+ * has no OAuth2 auth, no stored token, or no refresh_token (caller must
+ * propagate the original upstream 401 in that case — there is nothing we can
+ * do without user interaction).
+ *
+ * This is invoked from action code (via `ctx.refreshAuth()`) when an upstream
+ * API rejects the current access token with 401, so users are never asked to
+ * re-auth while a valid refresh_token is still on file.
+ */
+export async function forceRefreshNativeAuth(
+  pieceName: string,
+  authDef: { type: string },
+  env: Env,
+  userId?: string,
+): Promise<Record<string, string> | undefined> {
+  if (authDef.type !== 'oauth2' || !userId) return undefined;
+  const tokenStore = getKVBinding(env, 'TOKEN_STORE');
+  const encryptionKey = getEnvStr(env, 'TOKEN_ENCRYPTION_KEY');
+  if (!tokenStore || !encryptionKey) return undefined;
+
+  const stored = await getToken(tokenStore, pieceName, userId, encryptionKey).catch((err) => {
+    console.error('[freepieces] Force-refresh: KV lookup failed:', err);
+    return null;
+  });
+  if (!stored || !stored.refreshToken) return undefined;
+
+  const live = await refreshTokenIfNeeded(
+    stored,
+    authDef as OAuth2AuthDefinition,
+    env,
+    pieceName,
+    userId,
+    { force: true },
+  ).catch((err) => {
+    console.error('[freepieces] Force-refresh failed:', err);
+    return stored;
+  });
+
+  if (live.accessToken === stored.accessToken) return undefined;
+  console.log(`[freepieces] force-refresh: success for ${pieceName}/${userId}`);
+  return {
+    accessToken: live.accessToken,
+    ...(live.refreshToken ? { refreshToken: live.refreshToken } : {}),
+    ...(live.scope ? { scope: live.scope } : {}),
+  };
+}
+
+/**
  * Resolve runtime auth for an Activepieces native piece.
  * Handles KV token lookup, optional refresh, and direct-token fallback.
  */

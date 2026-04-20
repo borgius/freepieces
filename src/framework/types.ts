@@ -149,6 +149,11 @@ export interface OAuth2AuthDefinition {
    * Defaults to 'email'.
    */
   userIdField?: string;
+  /**
+   * Extra query parameters appended to the authorization URL.
+   * Use for provider-specific flags, e.g. `{ access_type: 'offline', prompt: 'consent' }` for Google.
+   */
+  additionalParams?: Record<string, string>;
 }
 
 export interface ApiKeyAuthDefinition {
@@ -176,6 +181,15 @@ export interface PieceActionContext {
   props?: Record<string, unknown>;
   /** Full Cloudflare Workers env (bindings + secrets). */
   env: Env;
+  /**
+   * Force-refresh the OAuth2 access token via the stored refresh_token and
+   * return the refreshed credentials. Call this from an action when an
+   * upstream API rejects the current `auth.accessToken` with 401, then retry
+   * the call once with the returned credentials. Resolves to `undefined` when
+   * the piece has no OAuth2 auth or no refresh_token is stored — in that case
+   * the original error must propagate.
+   */
+  refreshAuth?: () => Promise<Record<string, string> | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +242,10 @@ export interface PieceTriggerContext {
   lastPollMs?: number;
   /** Full Cloudflare Workers env (bindings + secrets). */
   env: Env;
+  /**
+   * Force-refresh the OAuth2 access token. See {@link PieceActionContext.refreshAuth}.
+   */
+  refreshAuth?: () => Promise<Record<string, string> | undefined>;
 }
 
 export interface PieceTrigger {

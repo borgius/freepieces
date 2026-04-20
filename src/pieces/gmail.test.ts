@@ -211,3 +211,76 @@ describe('gmail_get_mail action', () => {
 });
 
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('401 → refreshAuth → retry behaviour', () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  it('retries once with the refreshed token when Gmail returns 401', async () => {
+    // First call: stale token rejected by Gmail.
+    mockFetch.mockResolvedValueOnce(errResponse(401, 'Invalid Credentials'));
+    // Second call (after refresh): success.
+    mockFetch.mockResolvedValueOnce(okJson({
+      id: 'msg-abc',
+      threadId: 'thread-abc',
+      snippet: 'recovered',
+      payload: { headers: [{ name: 'Subject', value: 'after-refresh' }], parts: [] },
+    }));
+
+    const refreshAuth = vi.fn().mockResolvedValue({
+      accessToken: 'ya29.fresh-access-token',
+      refreshToken: 'test-refresh-token',
+    });
+
+    const action = gmailPiece.actions.find((a) => a.name === 'gmail_get_mail')!;
+    const result = await action.run({
+      auth: { ...mockAuth },
+      props: { message_id: 'msg-abc' },
+      env: mockEnv as never,
+      refreshAuth,
+    }) as Record<string, string>;
+
+    expect(refreshAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    const firstHeaders = (mockFetch.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    const secondHeaders = (mockFetch.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
+    expect(firstHeaders.Authorization).toBe('Bearer ya29.test-access-token');
+    expect(secondHeaders.Authorization).toBe('Bearer ya29.fresh-access-token');
+    expect(result.subject).toBe('after-refresh');
+  });
+
+  it('propagates the 401 when no refreshAuth callback is wired', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(401, 'Invalid Credentials'));
+
+    const action = gmailPiece.actions.find((a) => a.name === 'gmail_get_mail')!;
+    await expect(
+      action.run({
+        auth: { ...mockAuth },
+        props: { message_id: 'msg-abc' },
+        env: mockEnv as never,
+      })
+    ).rejects.toThrow(/Gmail API error 401/);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates the 401 when refreshAuth returns undefined (no refresh token on file)', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(401, 'Invalid Credentials'));
+    const refreshAuth = vi.fn().mockResolvedValue(undefined);
+
+    const action = gmailPiece.actions.find((a) => a.name === 'gmail_get_mail')!;
+    await expect(
+      action.run({
+        auth: { ...mockAuth },
+        props: { message_id: 'msg-abc' },
+        env: mockEnv as never,
+        refreshAuth,
+      })
+    ).rejects.toThrow(/Gmail API error 401/);
+
+    expect(refreshAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});

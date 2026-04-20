@@ -33,6 +33,10 @@
  *   RECIPIENT_EMAIL  where to send the test email (defaults to your own address)
  */
 
+// Load .env (gitignored) so RUN_API_KEY and other secrets are available locally.
+// Silently skipped when the file is absent (CI / deployed environments).
+try { process.loadEnvFile(); } catch { /* .env not present — rely on real env */ }
+
 const BASE_URL = process.env['FREEPIECES_PUBLIC_URL'] ?? process.env['FREEPIECES_URL'] ?? 'http://localhost:9321';
 const USER_ID = process.env['USER_ID'] ?? 'your-user-id';
 const RECIPIENT_EMAIL = process.env['RECIPIENT_EMAIL'] ?? 'your@email.com';
@@ -190,6 +194,9 @@ if (args.includes('--authorize')) {
     if (msg.includes('No access token')) {
       console.error('\nHint: You need to authorize first. Run:');
       console.error('  npx tsx examples/gmail-example.ts --authorize\n');
+    } else if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('connect')) {
+      console.error(`\nHint: The worker is not running at ${BASE_URL}.`);
+      console.error('  Start it with:  npm run dev\n');
     }
     process.exit(1);
   });

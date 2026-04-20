@@ -1,6 +1,23 @@
 import { timingSafeEqual } from './admin-session';
 import { createAuthClient, subjects } from '../auth/client';
 
+// Per-isolate cache for the OpenAuth client. createClient() keeps an internal
+// jwksCache + issuerCache; reusing the same instance across requests lets the
+// JWKS/well-known lookup happen once per isolate instead of on every JWT
+// verification (which otherwise triggers KV scans + jose key imports — ~15-30s
+// on cold reads).
+const authClientCache = new Map<string, ReturnType<typeof createAuthClient>>();
+
+function getCachedAuthClient(publicUrl: string, issuerFetch?: typeof fetch) {
+  const key = new URL(publicUrl).origin;
+  let client = authClientCache.get(key);
+  if (!client) {
+    client = createAuthClient(publicUrl, issuerFetch);
+    authClientCache.set(key, client);
+  }
+  return client;
+}
+
 export interface RuntimeRequestCredentials {
   userId?: string;
   pieceToken?: string;
@@ -82,7 +99,7 @@ export async function resolveRuntimeRequestAuth(
   // Mode 2: OpenAuth JWT verification
   if (bearerToken && publicUrl) {
     try {
-      const client = createAuthClient(publicUrl, issuerFetch);
+      const client = getCachedAuthClient(publicUrl, issuerFetch);
       const verified = await client.verify(subjects, bearerToken);
       if (!verified.err) {
         const jwtUserId = verified.subject.properties.userId ?? verified.subject.properties.email;

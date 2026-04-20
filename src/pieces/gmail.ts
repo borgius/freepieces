@@ -29,20 +29,50 @@ const GMAIL_SCOPES = [
 
 // ─── Gmail REST helpers ───────────────────────────────────────────────────────
 
+/**
+ * Token source for Gmail REST calls.
+ *
+ * Either a raw access token string (legacy callers / no refresh available) or
+ * a wrapper that exposes the current token plus a `refresh()` callback. When
+ * the wrapper form is used, {@link gmailFetch} transparently retries a single
+ * request after refreshing the token if Gmail responds with 401, so users are
+ * never asked to re-auth while a valid refresh_token is on file.
+ */
+export type GmailAuth =
+  | string
+  | {
+      get(): string;
+      refresh: () => Promise<string | undefined>;
+    };
+
+function readToken(auth: GmailAuth): string {
+  return typeof auth === 'string' ? auth : auth.get();
+}
+
 async function gmailFetch(
-  accessToken: string,
+  auth: GmailAuth,
   path: string,
   options: RequestInit = {}
 ): Promise<unknown> {
   const url = path.startsWith('http') ? path : `${GMAIL_API}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...((options.headers as Record<string, string>) ?? {}),
-    },
-  });
+  const send = async (token: string): Promise<Response> =>
+    fetch(url, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...((options.headers as Record<string, string>) ?? {}),
+      },
+    });
+
+  let res = await send(readToken(auth));
+
+  // On 401, attempt a single force-refresh + retry when a refresh callback exists.
+  if (res.status === 401 && typeof auth !== 'string') {
+    const fresh = await auth.refresh();
+    if (fresh) res = await send(fresh);
+  }
+
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Gmail API error ${res.status}: ${body}`);
@@ -50,8 +80,8 @@ async function gmailFetch(
   return res.json();
 }
 
-async function getUserEmail(accessToken: string): Promise<string> {
-  const profile = await gmailFetch(accessToken, '/users/me/profile') as { emailAddress: string };
+async function getUserEmail(auth: GmailAuth): Promise<string> {
+  const profile = await gmailFetch(auth, '/users/me/profile') as { emailAddress: string };
   return profile.emailAddress;
 }
 
@@ -187,14 +217,31 @@ function parseFullMessage(msg: Record<string, unknown>): Record<string, unknown>
 
 type Auth = Record<string, string> | undefined;
 
-function getToken(auth: Auth): string {
-  const t = auth?.accessToken;
-  if (!t) throw new Error('No access token available');
-  return t;
+/**
+ * Build a {@link GmailAuth} wrapper from an action context. The wrapper holds
+ * the *current* access token (mutated when `ctx.refreshAuth()` returns a fresh
+ * one) and exposes a `refresh()` callback that {@link gmailFetch} invokes on
+ * 401 responses, so the user is never asked to re-auth while a valid
+ * refresh_token is still on file.
+ */
+function bindGmailAuth(ctx: PieceActionContext): GmailAuth {
+  if (!ctx.auth?.accessToken) throw new Error('No access token available');
+  let current = ctx.auth.accessToken;
+  return {
+    get: () => current,
+    refresh: async () => {
+      if (!ctx.refreshAuth) return undefined;
+      const refreshed = await ctx.refreshAuth();
+      if (!refreshed?.accessToken) return undefined;
+      current = refreshed.accessToken;
+      ctx.auth = { ...ctx.auth, ...refreshed };
+      return current;
+    },
+  };
 }
 
 async function sendEmail(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const senderEmail = (p.from as string | undefined) || (await getUserEmail(tok));
   const from = p.sender_name ? `${p.sender_name} <${senderEmail}>` : senderEmail;
@@ -237,7 +284,7 @@ async function sendEmail(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function requestApprovalInMail(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const senderEmail = (p.from as string | undefined) || (await getUserEmail(tok));
   const from = p.sender_name ? `${p.sender_name} <${senderEmail}>` : senderEmail;
@@ -284,7 +331,7 @@ async function requestApprovalInMail(ctx: PieceActionContext): Promise<unknown> 
 }
 
 async function replyToEmail(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const orig = await gmailFetch(
     tok, `/users/me/messages/${p.message_id}?format=full`
@@ -329,7 +376,7 @@ async function replyToEmail(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function createDraftReply(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const orig = await gmailFetch(
     tok, `/users/me/messages/${p.message_id}?format=full`
@@ -389,14 +436,14 @@ async function createDraftReply(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function getMail(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const msg = await gmailFetch(tok, `/users/me/messages/${p.message_id}?format=full`) as Record<string, unknown>;
   return parseFullMessage(msg);
 }
 
 async function searchMail(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
 
   const qParts: string[] = [];
@@ -437,7 +484,7 @@ async function searchMail(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function getMails(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
 
   const qParts: string[] = [];
@@ -499,7 +546,7 @@ async function getMails(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function getThreads(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
 
   const qParts: string[] = [];
@@ -560,7 +607,7 @@ async function getThreads(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function customApiCall(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const method = (p.method as string) ?? 'GET';
   const path = p.url_path as string;
@@ -572,7 +619,7 @@ async function customApiCall(ctx: PieceActionContext): Promise<unknown> {
 }
 
 async function getThread(ctx: PieceActionContext): Promise<unknown> {
-  const tok = getToken(ctx.auth);
+  const tok = bindGmailAuth(ctx);
   const p = ctx.props as Record<string, unknown>;
   const format = (p.format as string) ?? 'full';
   return gmailFetch(tok, `/users/me/threads/${p.thread_id}?format=${format}`);
@@ -580,17 +627,29 @@ async function getThread(ctx: PieceActionContext): Promise<unknown> {
 
 // ─── Label helpers ────────────────────────────────────────────────────────────
 
-async function fetchLabels(accessToken: string): Promise<Array<{ id: string; name: string }>> {
-  const res = await gmailFetch(accessToken, '/users/me/labels') as { labels: Array<{ id: string; name: string }> };
+async function fetchLabels(auth: GmailAuth): Promise<Array<{ id: string; name: string }>> {
+  const res = await gmailFetch(auth, '/users/me/labels') as { labels: Array<{ id: string; name: string }> };
   return res.labels ?? [];
 }
 
 // ─── Trigger helpers ──────────────────────────────────────────────────────────
 
-function getTriggerToken(ctx: PieceTriggerContext): string {
-  const t = ctx.auth?.accessToken ?? ctx.auth?.token;
-  if (!t) throw new Error('No access token available');
-  return t;
+function bindTriggerAuth(ctx: PieceTriggerContext): GmailAuth {
+  const initial = ctx.auth?.accessToken ?? ctx.auth?.token;
+  if (!initial) throw new Error('No access token available');
+  let current = initial;
+  return {
+    get: () => current,
+    refresh: async () => {
+      if (!ctx.refreshAuth) return undefined;
+      const refreshed = await ctx.refreshAuth();
+      const next = refreshed?.accessToken ?? refreshed?.token;
+      if (!next) return undefined;
+      current = next;
+      ctx.auth = { ...ctx.auth, ...refreshed };
+      return current;
+    },
+  };
 }
 
 interface RawMessage {
@@ -602,15 +661,15 @@ interface RawMessage {
   snippet?: string;
 }
 
-async function fetchFullMessage(tok: string, id: string): Promise<RawMessage> {
+async function fetchFullMessage(tok: GmailAuth, id: string): Promise<RawMessage> {
   return gmailFetch(tok, `/users/me/messages/${id}?format=full`) as Promise<RawMessage>;
 }
 
-async function fetchRawMessage(tok: string, id: string): Promise<RawMessage & { raw: string }> {
+async function fetchRawMessage(tok: GmailAuth, id: string): Promise<RawMessage & { raw: string }> {
   return gmailFetch(tok, `/users/me/messages/${id}?format=raw`) as Promise<RawMessage & { raw: string }>;
 }
 
-async function fetchThread(tok: string, threadId: string): Promise<unknown> {
+async function fetchThread(tok: GmailAuth, threadId: string): Promise<unknown> {
   return gmailFetch(tok, `/users/me/threads/${threadId}?format=full`);
 }
 
@@ -660,7 +719,7 @@ function buildQueryFromProps(p: Record<string, unknown>): string {
 // ─── Trigger: New Email ───────────────────────────────────────────────────────
 
 async function newEmailTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
-  const tok = getTriggerToken(ctx);
+  const tok = bindTriggerAuth(ctx);
   const p = ctx.props ?? {};
   const lastMs = ctx.lastPollMs ?? 0;
   const maxResults = lastMs === 0 ? 5 : 20;
@@ -698,7 +757,7 @@ interface HistoryResponse {
 }
 
 async function newLabeledEmailTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
-  const tok = getTriggerToken(ctx);
+  const tok = bindTriggerAuth(ctx);
   const p = ctx.props ?? {};
   const labelId = (p.label as { id: string } | undefined)?.id;
   const labelName = (p.label as { name: string } | undefined)?.name ?? '';
@@ -750,7 +809,7 @@ async function newLabeledEmailTriggerRun(ctx: PieceTriggerContext): Promise<unkn
 // ─── Trigger: New Attachment ──────────────────────────────────────────────────
 
 async function newAttachmentTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
-  const tok = getTriggerToken(ctx);
+  const tok = bindTriggerAuth(ctx);
   const p = ctx.props ?? {};
   const lastMs = ctx.lastPollMs ?? 0;
   const maxResults = lastMs === 0 ? 5 : 20;
@@ -783,7 +842,7 @@ async function newAttachmentTriggerRun(ctx: PieceTriggerContext): Promise<unknow
 // ─── Trigger: New Conversation ────────────────────────────────────────────────
 
 async function newConversationTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
-  const tok = getTriggerToken(ctx);
+  const tok = bindTriggerAuth(ctx);
   const p = ctx.props ?? {};
   const lastHistoryId = p.lastHistoryId as string | undefined;
 
@@ -835,7 +894,7 @@ async function newConversationTriggerRun(ctx: PieceTriggerContext): Promise<unkn
 // ─── Trigger: New Label ───────────────────────────────────────────────────────
 
 async function newLabelTriggerRun(ctx: PieceTriggerContext): Promise<unknown[]> {
-  const tok = getTriggerToken(ctx);
+  const tok = bindTriggerAuth(ctx);
   const p = ctx.props ?? {};
   const knownIds = new Set<string>((p.knownLabelIds as string[]) ?? []);
 
@@ -860,6 +919,7 @@ export const gmailPiece = createPiece({
     clientSecretEnvKey: 'GMAIL_CLIENT_SECRET',
     userInfoUrl: 'https://www.googleapis.com/oauth2/v2/userinfo',
     userIdField: 'email',
+    additionalParams: { access_type: 'offline', prompt: 'consent' },
   },
   actions: [
     { name: 'send_email', displayName: 'Send Email', description: 'Send an email through a Gmail account', run: sendEmail },

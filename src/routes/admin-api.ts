@@ -11,6 +11,7 @@ import { listPieces, getPiece } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
 import { makeIssuerFetch } from '../lib/auth-issuer';
+import { fastVerify } from '../lib/fast-verify';
 import {
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
@@ -121,42 +122,54 @@ adminApi.use('*', async (c, next) => {
   const refreshToken = getCookie(c, REFRESH_COOKIE);
   if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
 
-  const t0 = Date.now();
-  const client = getAuthClient(c.env, new URL(c.req.url).origin);
-  const t1 = Date.now();
-  const verified = await client.verify(subjects, accessToken, {
-    refresh: refreshToken,
-  });
-  const t2 = Date.now();
-  console.log(`[admin-auth] getAuthClient=${t1 - t0}ms verify=${t2 - t1}ms total=${t2 - t0}ms path=${c.req.path}`);
-  if (verified.err) return c.json({ error: 'Unauthorized' }, 401);
+  const origin = new URL(c.req.url).origin;
 
-  if (verified.subject.type !== 'admin') {
+  // Hot path: KV-cached JWKS + jose verify (no OpenAuth client construction).
+  const t0 = Date.now();
+  const fast = await fastVerify(c.env, origin, c.executionCtx, accessToken);
+  const t1 = Date.now();
+  console.log(`[admin-auth] fastVerify=${t1 - t0}ms ok=${fast.ok} expired=${fast.ok ? false : fast.expired} path=${c.req.path}`);
+
+  let subject: { type: string; properties: Record<string, unknown> };
+
+  if (fast.ok) {
+    subject = fast.subject;
+  } else if (fast.expired && refreshToken) {
+    // Token expired and we have a refresh cookie → rotate via the OpenAuth client.
+    const client = getAuthClient(c.env, origin);
+    const verified = await client.verify(subjects, accessToken, { refresh: refreshToken });
+    if (verified.err) return c.json({ error: 'Unauthorized' }, 401);
+    if (verified.subject.type !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+    subject = { type: verified.subject.type, properties: verified.subject.properties as unknown as Record<string, unknown> };
+    // If tokens were refreshed, update cookies
+    if (verified.tokens) {
+      const secure = c.req.url.startsWith('https://');
+      setCookie(c, COOKIE_NAME, verified.tokens.access, {
+        httpOnly: true,
+        secure,
+        sameSite: 'Lax',
+        path: '/admin',
+        maxAge: 86400,
+      });
+      setCookie(c, REFRESH_COOKIE, verified.tokens.refresh, {
+        httpOnly: true,
+        secure,
+        sameSite: 'Lax',
+        path: '/admin',
+        maxAge: 7 * 86400,
+      });
+    }
+  } else {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  if (subject.type !== 'admin') {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  // If tokens were refreshed, update cookies
-  if (verified.tokens) {
-    const secure = c.req.url.startsWith('https://');
-    setCookie(c, COOKIE_NAME, verified.tokens.access, {
-      httpOnly: true,
-      secure,
-      sameSite: 'Lax',
-      path: '/admin',
-      maxAge: 86400,
-    });
-    setCookie(c, REFRESH_COOKIE, verified.tokens.refresh, {
-      httpOnly: true,
-      secure,
-      sameSite: 'Lax',
-      path: '/admin',
-      maxAge: 7 * 86400,
-    });
-  }
-
   c.set('session', {
-    sub: verified.subject.properties.userId,
-    email: verified.subject.properties.email,
+    sub: subject.properties['userId'] as string,
+    email: subject.properties['email'] as string,
   });
   await next();
 });
