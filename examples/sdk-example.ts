@@ -97,6 +97,7 @@ async function main(): Promise<void> {
 
   const rows: CloudflareD1Result = await client['cloudflare-d1'].query({
     sql: 'select * from users where id = ?',
+    // Replace the placeholder with your own application value or set USER_ID.
     params: [process.env['USER_ID'] ?? 'your-user-id'],
   });
   console.log('D1 rows:', rows.results.length);
