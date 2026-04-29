@@ -125,7 +125,7 @@ async function listObjects(ctx: PieceActionContext): Promise<unknown> {
   return {
     objects: result.objects.map(serializeObject),
     truncated: result.truncated,
-    cursor: result.cursor,
+    cursor: result.truncated ? result.cursor : undefined,
     delimitedPrefixes: result.delimitedPrefixes,
   };
 }

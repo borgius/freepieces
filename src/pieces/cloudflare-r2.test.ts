@@ -58,7 +58,7 @@ class FakeR2Bucket {
     this.lastListOptions = options;
     const prefix = options?.prefix ?? '';
     return {
-      objects: [...this.objects.values()].filter((object) => object.key.startsWith(prefix)),
+      objects: [...this.objects.values()].filter((object) => object.key.startsWith(prefix)) as unknown as R2Object[],
       delimitedPrefixes: [],
       truncated: false,
     };
