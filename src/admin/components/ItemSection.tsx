@@ -87,7 +87,9 @@ function buildCurlSnippet(
   return [
     `curl "${baseUrl()}/run/${pieceName}/${actionName}" \\`,
     `  -X POST \\`,
-    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_RUN_API_KEY" \\`,
+    `  -H "X-User-Id: $FREEPIECES_USER_ID" \\`,
+    `  -H "X-Piece-Token: $FREEPIECES_PIECE_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d ${dataArg}`,
   ].join('\n');
@@ -111,7 +113,9 @@ function buildFetchSnippet(
     `const res = await fetch('${baseUrl()}/run/${pieceName}/${actionName}', {`,
     `  method: 'POST',`,
     `  headers: {`,
-    '    Authorization: `Bearer ${process.env.FREEPIECES_TOKEN}`,',
+    '    Authorization: `Bearer ${process.env.FREEPIECES_RUN_API_KEY}`,',
+    `    'X-User-Id': process.env.FREEPIECES_USER_ID ?? '',`,
+    `    'X-Piece-Token': process.env.FREEPIECES_PIECE_TOKEN ?? '',`,
     `    'Content-Type': 'application/json',`,
     `  },`,
     `  body: ${bodyObj},`,
@@ -124,7 +128,7 @@ function buildFetchSnippet(
 // CodeBlock — pre/code with copy button
 // --------------------------------------------------------------------------
 
-function CodeBlock({ label, code }: { label: string; code: string }) {
+export function CodeBlock({ label, code }: { label: string; code: string }) {
   return (
     <Box>
       <HStack justify="space-between" align="center" mb={1}>
@@ -181,7 +185,9 @@ function buildTriggerPollCurlSnippet(
   return [
     `curl "${baseUrl()}/trigger/${pieceName}/${triggerName}" \\`,
     `  -X POST \\`,
-    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_RUN_API_KEY" \\`,
+    `  -H "X-User-Id: $FREEPIECES_USER_ID" \\`,
+    `  -H "X-Piece-Token: $FREEPIECES_PIECE_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d '{`,
     `    "propsValue": ${propsObj},`,
@@ -211,7 +217,9 @@ function buildSubscribeCurlSnippet(
     `# 1. Register your callback URL to receive events`,
     `curl "${baseUrl()}/subscriptions/${pieceName}/${triggerName}" \\`,
     `  -X POST \\`,
-    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_RUN_API_KEY" \\`,
+    `  -H "X-User-Id: $FREEPIECES_USER_ID" \\`,
+    `  -H "X-Piece-Token: $FREEPIECES_PIECE_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d '{`,
     `    "callbackUrl": "https://your-server.com/webhook",`,
@@ -239,7 +247,9 @@ function buildSubscribeFetchSnippet(
     `const res = await fetch('${baseUrl()}/subscriptions/${pieceName}/${triggerName}', {`,
     `  method: 'POST',`,
     `  headers: {`,
-    '    Authorization: `Bearer ${process.env.FREEPIECES_TOKEN}`,',
+    '    Authorization: `Bearer ${process.env.FREEPIECES_RUN_API_KEY}`,',
+    `    'X-User-Id': process.env.FREEPIECES_USER_ID ?? '',`,
+    `    'X-Piece-Token': process.env.FREEPIECES_PIECE_TOKEN ?? '',`,
     `    'Content-Type': 'application/json',`,
     `  },`,
     `  body: JSON.stringify({`,
@@ -274,7 +284,9 @@ function buildSubscribeQueueCurlSnippet(
     `# Requires [[queues.producers]] binding in wrangler.toml`,
     `curl "${baseUrl()}/subscriptions/${pieceName}/${triggerName}" \\`,
     `  -X POST \\`,
-    `  -H "Authorization: Bearer $FREEPIECES_TOKEN" \\`,
+    `  -H "Authorization: Bearer $FREEPIECES_RUN_API_KEY" \\`,
+    `  -H "X-User-Id: $FREEPIECES_USER_ID" \\`,
+    `  -H "X-Piece-Token: $FREEPIECES_PIECE_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d '{`,
     `    "queueName": "your-queue-name",`,
