@@ -98,7 +98,9 @@ Good piece names are:
 Examples in this repository:
 
 - `cloudflare-d1`
+- `cloudflare-queue`
 - `cloudflare-r2`
+- `cloudflare-workflow`
 - `gmail`
 - `slack`
 - `example-oauth`
@@ -168,7 +170,9 @@ They use:
 Examples in this repository:
 
 - `src/pieces/cloudflare-d1.ts`
+- `src/pieces/cloudflare-queue.ts`
 - `src/pieces/cloudflare-r2.ts`
+- `src/pieces/cloudflare-workflow.ts`
 - `src/pieces/gmail.ts`
 - `src/pieces/example-oauth.ts`
 - `src/pieces/example-apikey.ts`
@@ -282,7 +286,9 @@ Built-in pieces are registered directly there:
 
 ```ts
 registerPiece(cloudflareD1Piece);
+registerPiece(cloudflareQueuePiece);
 registerPiece(cloudflareR2Piece);
+registerPiece(cloudflareWorkflowPiece);
 registerPiece(exampleOAuthPiece);
 registerPiece(exampleApiKeyPiece);
 registerPiece(gmailPiece);
@@ -425,7 +431,9 @@ These paths matter when you work on piece-related code.
 | `src/compat/activepieces.ts` | compatibility shims for AP-style authoring |
 | `src/pieces/index.ts` | central piece import/registration file |
 | `src/pieces/cloudflare-d1.ts` | native Cloudflare D1 binding piece |
+| `src/pieces/cloudflare-queue.ts` | native Cloudflare Queue binding piece |
 | `src/pieces/cloudflare-r2.ts` | native Cloudflare R2 binding piece |
+| `src/pieces/cloudflare-workflow.ts` | native Cloudflare Workflow binding piece |
 | `src/pieces/gmail.ts` | native Gmail piece |
 | `src/pieces/example-oauth.ts` | native OAuth example |
 | `src/pieces/example-apikey.ts` | native API-key example |

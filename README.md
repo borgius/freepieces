@@ -27,7 +27,7 @@ The [Activepieces community](https://github.com/activepieces/activepieces/tree/m
 - **OAuth2 + API-key auth** — CSRF-protected OAuth flow, AES-256-GCM encrypted token storage in Cloudflare KV
 - **Admin UI** — React SPA for managing pieces, secrets, connected OAuth users, OAuth sessions, and embedded MDX docs
 - **Activepieces compat shims** — drop-in `createAction`, `PieceAuth`, and `Property` wrappers for porting community pieces
-- **Bundled Cloudflare pieces** — native D1 and R2 actions for querying bound databases and managing bucket objects
+- **Bundled Cloudflare pieces** — native D1, R2, Queue, and Workflow actions for Worker bindings
 
 ---
 
@@ -92,6 +92,7 @@ Run `fp --help` or `fp <command> --help` for full options.
 - `scripts/install.sh` — local bootstrap helper for this repository
 - `docs/pieces.mdx` — piece architecture, registration, and native vs AP pieces
 - `docs/actions.mdx` — action runtime contract and examples
+- `docs/cloudflare-bindings.mdx` — bundled D1, R2, Queue, and Workflow pieces
 - `docs/triggers.mdx` — webhook subscriptions, callback delivery, and queue delivery
 - `docs/pooling.mdx` — polling triggers, with Gmail as the main example
 
@@ -151,7 +152,7 @@ Use `X-User-Id` for OAuth2 pieces such as Gmail. Use `X-Piece-Token` for a singl
 
 In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback for both modes. The SDK and examples also send `X-User-Id` / `X-Piece-Token` when available so local and deployed behavior stay aligned.
 
-### Bundled Cloudflare D1 and R2 pieces
+### Bundled Cloudflare binding pieces
 
 `freepieces` includes native no-auth pieces for Worker-local Cloudflare bindings:
 
@@ -159,6 +160,8 @@ In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback
 | --- | --- | --- |
 | `cloudflare-d1` | `query`, `first`, `execute` | `DB` |
 | `cloudflare-r2` | `put_object`, `get_object`, `delete_object`, `list_objects` | `BUCKET` |
+| `cloudflare-queue` | `send_message`, `send_batch` | `QUEUE` |
+| `cloudflare-workflow` | `create_instance`, `create_batch`, `get_status`, `pause_instance`, `resume_instance`, `terminate_instance`, `restart_instance`, `send_event` | `WORKFLOW` |
 
 Add the relevant bindings to `wrangler.toml`:
 
@@ -171,6 +174,15 @@ database_id = "${D1_DATABASE_ID}"
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "your-bucket"
+
+[[queues.producers]]
+binding = "QUEUE"
+queue = "your-queue"
+
+[[workflows]]
+binding = "WORKFLOW"
+name = "your-workflow"
+class_name = "YourWorkflow"
 ```
 
 Then call the pieces like any other action:
@@ -185,9 +197,19 @@ curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-r2/put_object" \
   -H "Authorization: Bearer $RUN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "key": "notes/hello.txt", "value": "hello", "contentType": "text/plain" }'
+
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-queue/send_message" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "body": { "jobId": "job-id" }, "contentType": "json" }'
+
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-workflow/create_instance" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "id": "job-id", "params": { "source": "queue" } }'
 ```
 
-If your Worker uses different binding names, pass `databaseBinding` or `bucketBinding` in the action body.
+If your Worker uses different binding names, pass `databaseBinding`, `bucketBinding`, `queueBinding`, or `workflowBinding` in the action body.
 
 ### Queue delivery for subscriptions
 

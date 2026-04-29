@@ -4,11 +4,13 @@ import '../pieces/index.js';
 import { listPieces } from './registry';
 
 describe('listPieces OAuth secret derivation', () => {
-  it('includes built-in Cloudflare D1 and R2 pieces', () => {
+  it('includes built-in Cloudflare binding pieces', () => {
     const names = listPieces().map((piece) => piece.name);
 
     expect(names).toContain('cloudflare-d1');
+    expect(names).toContain('cloudflare-queue');
     expect(names).toContain('cloudflare-r2');
+    expect(names).toContain('cloudflare-workflow');
   });
 
   it('uses explicit per-piece secrets for native OAuth pieces', () => {
