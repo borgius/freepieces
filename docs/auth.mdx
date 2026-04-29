@@ -61,6 +61,7 @@ Here is the route-level summary.
 | `GET /auth/callback/:piece` | provider redirect | signed `state` parameter | finishes native OAuth2 flow and stores token |
 | `POST /auth/tokens/:piece` | admin/operator | OpenAuth admin session (cookie or Bearer JWT) | seeds tokens directly into KV |
 | `POST /run/:piece/:action` | app, script, SDK | runtime auth | executes an action |
+| `POST /mcp/:piece` | MCP client | runtime auth | exposes piece actions as MCP tools |
 | `POST /trigger/:piece/:trigger` | app, script, SDK | runtime auth | executes a trigger directly |
 | `POST /subscriptions/:piece/:trigger` | app, script, SDK | runtime auth | creates a stored subscription |
 | `GET /subscriptions/:piece` | app, script, SDK | runtime auth | lists subscriptions for the current runtime identity |
@@ -349,6 +350,7 @@ MY_PIECE_API_KEY
 Runtime caller auth applies to these routes:
 
 - `/run/:piece/:action`
+- `/mcp/:piece`
 - `/trigger/:piece/:trigger`
 - `/subscriptions/:piece/:trigger`
 - `/subscriptions/:piece`

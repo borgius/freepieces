@@ -25,6 +25,7 @@ The [Activepieces community](https://github.com/activepieces/activepieces/tree/m
 - **`fp` CLI** — scaffold a new Worker, search npm for pieces, install and generate wrappers, deploy
 - **Piece framework** — `createPiece()` and `createAction()` builders with full TypeScript types
 - **OAuth2 + API-key auth** — CSRF-protected OAuth flow, AES-256-GCM encrypted token storage in Cloudflare KV
+- **Automatic MCP servers** — every registered piece is exposed at `/mcp/:piece` with one tool per action
 - **Admin UI** — React SPA for managing pieces, secrets, connected OAuth users, OAuth sessions, and embedded MDX docs
 - **Activepieces compat shims** — drop-in `createAction`, `PieceAuth`, and `Property` wrappers for porting community pieces
 
@@ -91,6 +92,7 @@ Run `fp --help` or `fp <command> --help` for full options.
 - `scripts/install.sh` — local bootstrap helper for this repository
 - `docs/pieces.mdx` — piece architecture, registration, and native vs AP pieces
 - `docs/actions.mdx` — action runtime contract and examples
+- `docs/mcp.mdx` — MCP endpoint contract, auth headers, and client configuration examples
 - `docs/triggers.mdx` — webhook subscriptions, callback delivery, and queue delivery
 - `docs/pooling.mdx` — polling triggers, with Gmail as the main example
 
@@ -123,6 +125,27 @@ npm run deploy
 
 Native and compat OAuth pieces must declare their own `clientIdEnvKey` and `clientSecretEnvKey` values. Direct `registerApPiece()` integrations derive secret names from the piece name, for example `my-piece` → `MY_PIECE_CLIENT_ID` and `MY_PIECE_CLIENT_SECRET`.
 
+### MCP usage
+
+Every registered piece is also available as a Model Context Protocol server at `/mcp/:piece`. The endpoint uses the same runtime auth headers as `/run`.
+
+```json
+{
+  "mcpServers": {
+    "gmail": {
+      "url": "https://<your-worker>.workers.dev/mcp/gmail",
+      "headers": {
+        "Authorization": "Bearer ${FREEPIECES_RUN_API_KEY}",
+        "X-User-Id": "${FREEPIECES_USER_ID}",
+        "X-Piece-Token": "${FREEPIECES_PIECE_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Use `tools/list` to discover the action tools and `tools/call` to execute them.
+
 ### API routes
 
 | Method | Path | Description |
@@ -132,6 +155,7 @@ Native and compat OAuth pieces must declare their own `clientIdEnvKey` and `clie
 | `GET` | `/auth/login/:piece?userId=<id>` | Start OAuth2 flow |
 | `GET` | `/auth/callback/:piece` | OAuth2 callback, stores token |
 | `POST` | `/run/:piece/:action` | Execute an action (JSON body = props) |
+| `POST` | `/mcp/:piece` | MCP JSON-RPC endpoint for a piece; actions are exposed as tools |
 | `POST` | `/trigger/:piece/:trigger` | Execute a trigger filter for an inbound payload |
 | `POST` | `/subscriptions/:piece/:trigger` | Register a webhook subscription |
 | `GET` | `/subscriptions/:piece` | List subscriptions for the current runtime identity |
@@ -195,7 +219,7 @@ import { createClient } from 'freepieces/sdk';
 const client = createClient({
   baseUrl: 'https://freepieces.example.workers.dev',
   token: process.env.RUN_API_KEY,      // fp_sk_<hex32>
-  userId: 'alice@example.com',         // KV lookup key for OAuth2 pieces
+  userId: 'your-user-id',              // KV lookup key for OAuth2 pieces
   pieceToken: 'xoxb-...',              // optional direct credential for API-key/CUSTOM_AUTH pieces
 });
 ```
