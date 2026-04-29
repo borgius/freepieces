@@ -22,11 +22,7 @@ import { ChevronDown, ChevronRight, Copy, Link2, ScanSearch } from 'lucide-react
 import type { LucideIcon } from 'lucide-react';
 import type { PieceAction, PieceTrigger, PropDef } from '../lib/api';
 
-import { ActionUsageTab, PropTable, TriggerUsageTab } from './ItemUsage';
-
-function baseUrl(): string {
-  return window.location.origin;
-}
+import { ActionUsageTab, baseUrl, PropTable, TriggerUsageTab } from './ItemUsage';
 
 // --------------------------------------------------------------------------
 // Single action / trigger row with expand/collapse

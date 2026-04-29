@@ -42,7 +42,7 @@ function propPalette(type: string): string {
 // --------------------------------------------------------------------------
 
 /** Worker base URL derived from the admin panel's origin (same Worker). */
-function baseUrl(): string {
+export function baseUrl(): string {
   return window.location.origin;
 }
 
