@@ -6,15 +6,27 @@
 
 import type { ExampleApiKeyClient } from './example-apikey.js';
 import type { ExampleOAuthClient } from './example-oauth.js';
+import type { CloudflareD1Client } from './cloudflare-d1.js';
+import type { CloudflareQueueClient } from './cloudflare-queue.js';
+import type { CloudflareR2Client } from './cloudflare-r2.js';
+import type { CloudflareWorkflowClient } from './cloudflare-workflow.js';
 import type { GmailClient } from './gmail.js';
 import type { SlackClient } from './npm-slack.js';
 
+export * from './cloudflare-d1.js';
+export * from './cloudflare-queue.js';
+export * from './cloudflare-r2.js';
+export * from './cloudflare-workflow.js';
 export * from './example-apikey.js';
 export * from './example-oauth.js';
 export * from './gmail.js';
 export * from './npm-slack.js';
 
 export interface KnownPieces {
+  'cloudflare-d1': CloudflareD1Client;
+  'cloudflare-queue': CloudflareQueueClient;
+  'cloudflare-r2': CloudflareR2Client;
+  'cloudflare-workflow': CloudflareWorkflowClient;
   'example-apikey': ExampleApiKeyClient;
   'example-oauth': ExampleOAuthClient;
   'gmail': GmailClient;
@@ -22,6 +34,10 @@ export interface KnownPieces {
 }
 
 export const knownPieceNames: ReadonlyArray<keyof KnownPieces> = [
+  'cloudflare-d1',
+  'cloudflare-queue',
+  'cloudflare-r2',
+  'cloudflare-workflow',
   'example-apikey',
   'example-oauth',
   'gmail',

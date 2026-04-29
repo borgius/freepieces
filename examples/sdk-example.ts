@@ -17,7 +17,13 @@
  */
 
 import { createClient } from '../src/sdk/index.js';
-import type { GmailMessage, GmailSearchResult } from '../src/sdk/index.js';
+import type {
+  CloudflareD1Result,
+  CloudflareR2GetObjectOutput,
+  CloudflareWorkflowInstanceOutput,
+  GmailMessage,
+  GmailSearchResult,
+} from '../src/sdk/index.js';
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +98,37 @@ async function main(): Promise<void> {
 
   const echo = await client['example-apikey'].echo({ message: 'hello' });
   console.log('Echo:', echo.echo);
+
+  // ── Cloudflare binding pieces ─────────────────────────────────────────────
+
+  const rows: CloudflareD1Result = await client['cloudflare-d1'].query({
+    sql: 'select * from users where id = ?',
+    // Replace the placeholder with your own application value or set USER_ID.
+    params: [process.env['USER_ID'] ?? 'your-user-id'],
+  });
+  console.log('D1 rows:', rows.results.length);
+
+  await client['cloudflare-r2'].put_object({
+    key: 'notes/hello.txt',
+    value: 'hello',
+    contentType: 'text/plain',
+  });
+
+  const object: CloudflareR2GetObjectOutput = await client['cloudflare-r2'].get_object({
+    key: 'notes/hello.txt',
+  });
+  console.log('R2 object found:', object.found);
+
+  await client['cloudflare-queue'].send_message({
+    body: { jobId: 'job-id' },
+    contentType: 'json',
+  });
+
+  const workflow: CloudflareWorkflowInstanceOutput = await client['cloudflare-workflow'].create_instance({
+    id: 'job-id',
+    params: { source: 'sdk-example' },
+  });
+  console.log('Workflow instance:', workflow.instance.id);
 
   // ── Generic escape-hatch (any piece, any action) ──────────────────────────
 
