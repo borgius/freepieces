@@ -7,10 +7,14 @@
  */
 
 import { registerPiece } from '../framework/registry.js';
+import { cloudflareD1Piece } from './cloudflare-d1.js';
+import { cloudflareR2Piece } from './cloudflare-r2.js';
 import { exampleOAuthPiece } from './example-oauth.js';
 import { exampleApiKeyPiece } from './example-apikey.js';
 import { gmailPiece } from './gmail.js';
 
+registerPiece(cloudflareD1Piece);
+registerPiece(cloudflareR2Piece);
 registerPiece(exampleOAuthPiece);
 registerPiece(exampleApiKeyPiece);
 registerPiece(gmailPiece);

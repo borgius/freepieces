@@ -17,7 +17,7 @@
  */
 
 import { createClient } from '../src/sdk/index.js';
-import type { GmailMessage, GmailSearchResult } from '../src/sdk/index.js';
+import type { CloudflareD1Result, CloudflareR2GetObjectOutput, GmailMessage, GmailSearchResult } from '../src/sdk/index.js';
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +92,25 @@ async function main(): Promise<void> {
 
   const echo = await client['example-apikey'].echo({ message: 'hello' });
   console.log('Echo:', echo.echo);
+
+  // ── Cloudflare D1 and R2 bindings ─────────────────────────────────────────
+
+  const rows: CloudflareD1Result = await client['cloudflare-d1'].query({
+    sql: 'select * from users where id = ?',
+    params: [process.env['USER_ID'] ?? 'your-user-id'],
+  });
+  console.log('D1 rows:', rows.results.length);
+
+  await client['cloudflare-r2'].put_object({
+    key: 'notes/hello.txt',
+    value: 'hello',
+    contentType: 'text/plain',
+  });
+
+  const object: CloudflareR2GetObjectOutput = await client['cloudflare-r2'].get_object({
+    key: 'notes/hello.txt',
+  });
+  console.log('R2 object found:', object.found);
 
   // ── Generic escape-hatch (any piece, any action) ──────────────────────────
 
