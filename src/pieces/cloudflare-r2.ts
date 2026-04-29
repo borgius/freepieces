@@ -35,6 +35,12 @@ function readOptionalString(props: Record<string, unknown>, key: string): string
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+type R2StringListOption = 'prefix' | 'cursor' | 'delimiter';
+
+function setOptionalString(options: R2ListOptions, key: R2StringListOption, value: string | undefined): void {
+  if (value) options[key] = value;
+}
+
 function readStringMap(props: Record<string, unknown>, key: string): Record<string, string> | undefined {
   const value = props[key];
   if (value == null) return undefined;
@@ -115,12 +121,13 @@ async function listObjects(ctx: PieceActionContext): Promise<unknown> {
   const limit = typeof props['limit'] === 'number'
     ? Math.min(Math.max(Math.trunc(props['limit']), 1), 1000)
     : undefined;
-  const result = await bucket.list({
-    ...(limit ? { limit } : {}),
-    ...(readOptionalString(props, 'prefix') ? { prefix: readOptionalString(props, 'prefix') } : {}),
-    ...(readOptionalString(props, 'cursor') ? { cursor: readOptionalString(props, 'cursor') } : {}),
-    ...(readOptionalString(props, 'delimiter') ? { delimiter: readOptionalString(props, 'delimiter') } : {}),
-  });
+  const options: R2ListOptions = {};
+  if (limit) options.limit = limit;
+  setOptionalString(options, 'prefix', readOptionalString(props, 'prefix'));
+  setOptionalString(options, 'cursor', readOptionalString(props, 'cursor'));
+  setOptionalString(options, 'delimiter', readOptionalString(props, 'delimiter'));
+
+  const result = await bucket.list(options);
 
   return {
     objects: result.objects.map(serializeObject),

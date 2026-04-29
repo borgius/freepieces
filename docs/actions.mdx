@@ -217,22 +217,9 @@ No-auth pieces simply run without auth material.
 
 Bundled Cloudflare binding pieces are native no-auth pieces. They operate on bindings already attached to the Worker, so runtime callers only need the normal `RUN_API_KEY` gate when it is configured.
 
-`cloudflare-d1` uses a D1 binding named `DB` by default and supports:
+`cloudflare-d1` uses `DB` by default and supports `query`, `first`, and `execute`. Pass `databaseBinding` when your Worker binding has another name, and prefer `?` placeholders with `params` instead of interpolating values into SQL.
 
-- `query` — run a prepared statement and return all rows
-- `first` — run a prepared statement and return the first row or column value
-- `execute` — run an INSERT, UPDATE, DELETE, or DDL statement
-
-Pass `databaseBinding` when your Worker binding is not named `DB`. Prefer `?` placeholders with `params` instead of interpolating values into SQL.
-
-`cloudflare-r2` uses an R2 binding named `BUCKET` by default and supports:
-
-- `put_object`
-- `get_object`
-- `delete_object`
-- `list_objects`
-
-Pass `bucketBinding` when your Worker binding is not named `BUCKET`.
+`cloudflare-r2` uses `BUCKET` by default and supports `put_object`, `get_object`, `delete_object`, and `list_objects`. Pass `bucketBinding` when your Worker binding has another name.
 
 ## Raw HTTP contract
 
