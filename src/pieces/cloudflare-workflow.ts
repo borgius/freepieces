@@ -115,6 +115,22 @@ async function sendEvent(ctx: PieceActionContext): Promise<unknown> {
   return { ok: true, id: instance.id };
 }
 
+async function pauseInstance(ctx: PieceActionContext): Promise<unknown> {
+  return runInstanceOperation(ctx, 'pause');
+}
+
+async function resumeInstance(ctx: PieceActionContext): Promise<unknown> {
+  return runInstanceOperation(ctx, 'resume');
+}
+
+async function terminateInstance(ctx: PieceActionContext): Promise<unknown> {
+  return runInstanceOperation(ctx, 'terminate');
+}
+
+async function restartInstance(ctx: PieceActionContext): Promise<unknown> {
+  return runInstanceOperation(ctx, 'restart');
+}
+
 export const cloudflareWorkflowPiece = createPiece({
   name: 'cloudflare-workflow',
   displayName: 'Cloudflare Workflow',
@@ -157,28 +173,28 @@ export const cloudflareWorkflowPiece = createPiece({
       displayName: 'Pause Instance',
       description: 'Pause a Workflow instance.',
       props: { workflowBinding: workflowBindingProp, id: instanceIdProp },
-      run: (ctx) => runInstanceOperation(ctx, 'pause'),
+      run: pauseInstance,
     },
     {
       name: 'resume_instance',
       displayName: 'Resume Instance',
       description: 'Resume a Workflow instance.',
       props: { workflowBinding: workflowBindingProp, id: instanceIdProp },
-      run: (ctx) => runInstanceOperation(ctx, 'resume'),
+      run: resumeInstance,
     },
     {
       name: 'terminate_instance',
       displayName: 'Terminate Instance',
       description: 'Terminate a Workflow instance.',
       props: { workflowBinding: workflowBindingProp, id: instanceIdProp },
-      run: (ctx) => runInstanceOperation(ctx, 'terminate'),
+      run: terminateInstance,
     },
     {
       name: 'restart_instance',
       displayName: 'Restart Instance',
       description: 'Restart a Workflow instance.',
       props: { workflowBinding: workflowBindingProp, id: instanceIdProp },
-      run: (ctx) => runInstanceOperation(ctx, 'restart'),
+      run: restartInstance,
     },
     {
       name: 'send_event',
