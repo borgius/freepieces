@@ -66,6 +66,7 @@ export interface PieceSummary {
   displayName: string;
   description?: string;
   version?: string;
+  mcpEndpoint?: string;
   authType: string;
   actions: Array<{ name: string; displayName: string; description?: string }>;
   triggers?: Array<{ name: string; displayName: string; type: string }>;
