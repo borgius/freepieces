@@ -72,8 +72,14 @@ export function requireKVBinding(env: Env, name: string): KVNamespace {
 /**
  * Read a boolean env var.
  * Returns true when the first defined variant is "true", "1", or "yes" (case-insensitive).
+ * When no variant is set, returns `defaultValue`, which defaults to `false`.
+ * Pass `undefined` explicitly to distinguish "not set" from an explicit false value.
  */
-export function getEnvBool(env: Env, name: string): boolean {
+export function getEnvBool(env: Env, name: string): boolean;
+export function getEnvBool(env: Env, name: string, defaultValue: boolean): boolean;
+export function getEnvBool(env: Env, name: string, defaultValue: undefined): boolean | undefined;
+export function getEnvBool(env: Env, name: string, defaultValue: boolean | undefined = false): boolean | undefined {
   const v = getEnvStr(env, name);
+  if (v === undefined) return defaultValue;
   return v === 'true' || v === '1' || v === 'yes';
 }

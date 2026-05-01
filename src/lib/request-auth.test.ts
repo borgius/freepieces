@@ -158,7 +158,14 @@ describe('resolveRuntimeRequestAuth', () => {
         true,
       );
 
-      expect(result).toEqual({ ok: true, credentials: {} });
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          userId: undefined,
+          pieceToken: undefined,
+          pieceAuthProps: undefined,
+        },
+      });
     });
 
     it('still surfaces X-User-Id and X-Piece-Token headers when auth is disabled', async () => {
