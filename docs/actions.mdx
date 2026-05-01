@@ -19,6 +19,8 @@ Examples:
 
 - send an email with Gmail
 - post a Slack message
+- query a Cloudflare D1 database binding
+- put or fetch an object from a Cloudflare R2 bucket binding
 - fetch a record from an API
 - call a custom API endpoint
 - run a simple API-key-backed operation such as `ping`
@@ -211,6 +213,12 @@ Examples:
 
 No-auth pieces simply run without auth material.
 
+### Cloudflare binding pieces
+
+Bundled Cloudflare binding pieces are native no-auth pieces. They operate on bindings already attached to the Worker, so runtime callers only need the normal `RUN_API_KEY` gate when it is configured.
+
+`cloudflare-d1`, `cloudflare-r2`, `cloudflare-queue`, and `cloudflare-workflow` wrap Worker bindings. See [Cloudflare binding pieces](./cloudflare-bindings.mdx) for binding names and examples.
+
 ## Raw HTTP contract
 
 The standard request is:
@@ -346,6 +354,35 @@ That call uses:
 
 - `Authorization` for caller auth
 - `X-Piece-Token` for the Slack bot token
+
+## Cloudflare D1 example
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-d1/query" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -d '{
+    "sql": "select * from users where id = ?",
+    "params": ["your-user-id"]
+  }'
+```
+
+Use `databaseBinding` if your binding is not named `DB`.
+
+## Cloudflare R2 example
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-r2/put_object" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -d '{
+    "key": "notes/hello.txt",
+    "value": "hello",
+    "contentType": "text/plain"
+  }'
+```
+
+Use `bucketBinding` if your binding is not named `BUCKET`.
 
 ### Why Slack works this way
 
