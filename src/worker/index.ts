@@ -1,5 +1,6 @@
 export { createFreepiecesWorker } from './create-worker.js';
 export type { FreepiecesWorker } from './create-worker.js';
+export { cloudflareD1Piece } from '../pieces/cloudflare-d1.js';
 export { gmailPiece } from '../pieces/gmail.js';
 // Re-export the framework public surface so consumers can import everything
 // they need from one subpath and share the same global registry instance.

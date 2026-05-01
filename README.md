@@ -187,6 +187,14 @@ In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback
 | `cloudflare-queue` | `send_message`, `send_batch` | `QUEUE` |
 | `cloudflare-workflow` | `create_instance`, `create_batch`, `get_status`, `pause_instance`, `resume_instance`, `terminate_instance`, `restart_instance`, `send_event` | `WORKFLOW` |
 
+If you are using `freepieces` as a library, you can register the built-in D1 piece directly instead of copying its implementation:
+
+```ts
+import { cloudflareD1Piece, registerPiece } from 'freepieces/worker';
+
+registerPiece(cloudflareD1Piece);
+```
+
 Add the relevant bindings to `wrangler.toml`:
 
 ```toml

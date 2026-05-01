@@ -72,7 +72,8 @@ export function buildApContext(
       break;
     }
     if (authDef.type === 'SECRET_TEXT') {
-      apAuth = auth?.token ?? getEnvStr(env, `${envPrefix}_TOKEN`) ?? '';
+      const secret = auth?.token ?? getEnvStr(env, `${envPrefix}_TOKEN`) ?? '';
+      apAuth = { secret_text: secret };
       break;
     }
     if (authDef.type === 'OAUTH2') {
