@@ -26,6 +26,22 @@ vi.mock('./auth/client', () => ({
   }),
 }));
 
+// Mock fastVerify so tests don't need a real JWKS/KV issuer setup
+vi.mock('./lib/fast-verify', () => ({
+  fastVerify: async (_env: unknown, _origin: unknown, _ctx: unknown, token: string) => {
+    if (token === 'valid-admin-token') {
+      return {
+        ok: true,
+        subject: {
+          type: 'admin',
+          properties: { userId: 'admin-user', email: 'admin@example.com', role: 'admin' },
+        },
+      };
+    }
+    return { ok: false, expired: false };
+  },
+}));
+
 class MemoryKv {
   private readonly store = new Map<string, string>();
 
