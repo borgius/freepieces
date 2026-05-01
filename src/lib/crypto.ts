@@ -20,12 +20,36 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
+// CryptoKey cache — `crypto.subtle.importKey()` allocates a new key object on
+// every call (a few ms on Workers). Caching by the hex-encoded secret keeps
+// every token encrypt/decrypt on the hot path cheap. The TOKEN_ENCRYPTION_KEY
+// Cloudflare Secret is effectively immutable for the lifetime of a deployment.
+const keyCache = new Map<string, Promise<CryptoKey>>();
+
 async function importKey(hexKey: string): Promise<CryptoKey> {
-  const raw = hexToBytes(hexKey);
-  if (raw.length !== 32) throw new Error('TOKEN_ENCRYPTION_KEY must be 32 bytes (64 hex chars). Generate with: openssl rand -hex 32');
-  // Slice to a plain ArrayBuffer so Workers types accept it as BufferSource.
-  const rawBuf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
-  return crypto.subtle.importKey('raw', rawBuf, ALG, false, ['encrypt', 'decrypt']);
+  const cached = keyCache.get(hexKey);
+  if (cached) return cached;
+
+  const pending = (async (): Promise<CryptoKey> => {
+    const raw = hexToBytes(hexKey);
+    if (raw.length !== 32) {
+      throw new Error('TOKEN_ENCRYPTION_KEY must be 32 bytes (64 hex chars). Generate with: openssl rand -hex 32');
+    }
+    // Slice to a plain ArrayBuffer so Workers types accept it as BufferSource.
+    const rawBuf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
+    return crypto.subtle.importKey('raw', rawBuf, ALG, false, ['encrypt', 'decrypt']);
+  })();
+
+  // Store the promise immediately so concurrent callers share one import call,
+  // but evict on failure so a bad key doesn't stay cached.
+  keyCache.set(hexKey, pending);
+  pending.catch(() => keyCache.delete(hexKey));
+  return pending;
+}
+
+/** Clear the CryptoKey cache. Exported for tests. */
+export function __resetCryptoKeyCache(): void {
+  keyCache.clear();
 }
 
 /** Encrypt a plaintext string.  Returns "<iv>:<ciphertext>" in base64url. */

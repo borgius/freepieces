@@ -11,6 +11,32 @@ type StoredPiece =
 const pieces = new Map<string, StoredPiece>();
 
 // ---------------------------------------------------------------------------
+// Derived-data caches.
+//
+// These are rebuilt lazily on first read after any `registerPiece` /
+// `registerApPiece` call, so callers on the hot path (admin `/pieces`,
+// runtime action/trigger dispatch, webhook fan-out) pay no per-request cost
+// for list construction, secret derivation, or trigger lookups.
+// ---------------------------------------------------------------------------
+
+// Bumped on every register*() call. Every cache is invalidated when it notices
+// a mismatch against the snapshot taken when it was last populated.
+let registryVersion = 0;
+
+let listPiecesCache: PieceSummaryEntry[] | null = null;
+let listPiecesVersion = -1;
+
+const secretsCache = new Map<string, SecretGroup[]>();
+
+// Fast O(1) trigger lookup: pieceName -> triggerName -> def
+const triggerIndex = new Map<string, Map<string, ApTrigger | PieceTrigger>>();
+let triggerIndexVersion = -1;
+
+function invalidateRegistryCaches(): void {
+  registryVersion++;
+}
+
+// ---------------------------------------------------------------------------
 // Prop extraction helper
 // ---------------------------------------------------------------------------
 
@@ -45,6 +71,7 @@ function extractProps(
 /** Register a freepieces native piece. */
 export function registerPiece(piece: PieceDefinition): void {
   pieces.set(piece.name, { kind: 'native', def: piece });
+  invalidateRegistryCaches();
 }
 
 /**
@@ -59,6 +86,7 @@ export function registerPiece(piece: PieceDefinition): void {
  */
 export function registerApPiece(name: string, piece: ApPiece): void {
   pieces.set(name, { kind: 'ap', name, piece });
+  invalidateRegistryCaches();
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +153,7 @@ function requireNativeOAuthEnvKey(
  * Pieces with multiple auth modes (e.g. Slack: OAUTH2 + CUSTOM_AUTH) return one group per mode
  * so the user can pick the mode they want to set up — not a combined flat list.
  */
-function deriveSecrets(stored: StoredPiece): SecretGroup[] {
+function deriveSecretsUncached(stored: StoredPiece): SecretGroup[] {
   if (stored.kind === 'native') {
     const auth = stored.def.auth as unknown as Record<string, unknown>;
     if (auth['type'] === 'oauth2') {
@@ -204,8 +232,8 @@ function deriveSecrets(stored: StoredPiece): SecretGroup[] {
   return groups;
 }
 
-/** Normalised piece list for the /pieces API. */
-export function listPieces(): Array<{
+/** Shape returned by `listPieces()`. */
+export interface PieceSummaryEntry {
   name: string;
   displayName: string;
   description: string | undefined;
@@ -214,8 +242,26 @@ export function listPieces(): Array<{
   actions: Array<{ name: string; displayName: string; description?: string; props?: Record<string, PropDefinition> }>;
   triggers: Array<{ name: string; displayName: string; description?: string; type: string; props?: Record<string, PropDefinition> }>;
   secrets: SecretGroup[];
-}> {
-  return [...pieces.values()].map((stored) => {
+}
+
+/** Derive secrets for a piece, memoized per registry version. */
+function deriveSecrets(stored: StoredPiece): SecretGroup[] {
+  const key = stored.kind === 'native' ? `n:${stored.def.name}` : `a:${stored.name}`;
+  const cached = secretsCache.get(key);
+  if (cached) return cached;
+  const groups = deriveSecretsUncached(stored);
+  secretsCache.set(key, groups);
+  return groups;
+}
+
+/** Normalised piece list for the /pieces API. Memoized per registry version. */
+export function listPieces(): PieceSummaryEntry[] {
+  if (listPiecesCache && listPiecesVersion === registryVersion) return listPiecesCache;
+
+  // Registry mutated — drop stale per-piece caches.
+  secretsCache.clear();
+
+  const result = [...pieces.values()].map((stored): PieceSummaryEntry => {
     if (stored.kind === 'native') {
       const d = stored.def;
       return {
@@ -264,15 +310,51 @@ export function listPieces(): Array<{
       secrets: deriveSecrets(stored),
     };
   });
+
+  listPiecesCache = result;
+  listPiecesVersion = registryVersion;
+  return result;
+}
+
+/**
+ * Rebuild the trigger lookup index so `getTrigger()` is O(1).
+ * Called lazily from `getTrigger()` when the registry has changed.
+ */
+function rebuildTriggerIndex(): void {
+  triggerIndex.clear();
+  for (const stored of pieces.values()) {
+    const name = stored.kind === 'native' ? stored.def.name : stored.name;
+    const inner = new Map<string, ApTrigger | PieceTrigger>();
+    if (stored.kind === 'ap') {
+      for (const [trigName, trig] of Object.entries(stored.piece._triggers ?? {})) {
+        inner.set(trigName, trig as ApTrigger);
+      }
+    } else {
+      for (const trig of stored.def.triggers ?? []) {
+        inner.set(trig.name, trig);
+      }
+    }
+    triggerIndex.set(name, inner);
+  }
+  triggerIndexVersion = registryVersion;
 }
 
 /**
  * Look up a single trigger by piece name + trigger name.
- * Works for both AP and native pieces.
+ * Works for both AP and native pieces. O(1) after first call per registry version.
  */
 export function getTrigger(pieceName: string, triggerName: string): ApTrigger | PieceTrigger | undefined {
-  const stored = pieces.get(pieceName);
-  if (!stored) return undefined;
-  if (stored.kind === 'ap') return stored.piece._triggers?.[triggerName];
-  return stored.def.triggers?.find((t) => t.name === triggerName);
+  if (triggerIndexVersion !== registryVersion) rebuildTriggerIndex();
+  return triggerIndex.get(pieceName)?.get(triggerName);
+}
+
+/** Reset all registry state. Exported for tests. */
+export function __resetRegistryForTests(): void {
+  pieces.clear();
+  secretsCache.clear();
+  triggerIndex.clear();
+  listPiecesCache = null;
+  listPiecesVersion = -1;
+  triggerIndexVersion = -1;
+  invalidateRegistryCaches();
 }

@@ -58,6 +58,19 @@ export interface FreePiecesClientOptions {
    * Defaults to the global `fetch`.
    */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Per-request timeout in milliseconds. Aborts the `fetch()` with an
+   * `AbortSignal.timeout()` when exceeded. Defaults to 30_000 (30s).
+   * Set to `0` to disable.
+   */
+  timeoutMs?: number;
+  /**
+   * Number of additional retry attempts for transient network / 5xx failures
+   * on idempotent requests (`GET` and `trigger`/`listPieces` internally).
+   * `run()` is NOT retried by default, since actions may not be idempotent.
+   * Defaults to `2`.
+   */
+  retries?: number;
 }
 
 /** Shape returned by GET /pieces */

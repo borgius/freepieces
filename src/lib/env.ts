@@ -11,13 +11,25 @@ import type { Env } from '../framework/types';
 
 type AnyRecord = Record<string, unknown>;
 
+// Env key lookup order is fixed; precompute once per logical name so hot-path
+// callers (every `/run` request reads several env vars) don't re-concatenate
+// strings on every lookup.
+const keyVariantsCache = new Map<string, readonly string[]>();
+function keyVariants(name: string): readonly string[] {
+  const cached = keyVariantsCache.get(name);
+  if (cached) return cached;
+  const variants = Object.freeze([`FREEPIECES_${name}`, `FP_${name}`, name]);
+  keyVariantsCache.set(name, variants);
+  return variants;
+}
+
 /**
  * Read a string env var.
  * Returns the first defined, non-empty string from the three key variants.
  */
 export function getEnvStr(env: Env, name: string): string | undefined {
   const r = env as AnyRecord;
-  for (const key of [`FREEPIECES_${name}`, `FP_${name}`, name]) {
+  for (const key of keyVariants(name)) {
     const v = r[key];
     if (typeof v === 'string' && v.length > 0) return v;
   }
@@ -40,7 +52,7 @@ export function requireEnvStr(env: Env, name: string): string {
  */
 export function getKVBinding(env: Env, name: string): KVNamespace | undefined {
   const r = env as AnyRecord;
-  for (const key of [`FREEPIECES_${name}`, `FP_${name}`, name]) {
+  for (const key of keyVariants(name)) {
     const v = r[key];
     if (v != null && typeof v === 'object' && 'get' in (v as object)) return v as KVNamespace;
   }

@@ -56,10 +56,15 @@ export async function getToken(
  *
  * The returned values are the raw `userId` strings used when tokens were
  * stored, which may be email addresses or any other caller-defined lookup key.
+ *
+ * @param limit - Optional maximum number of user IDs to return. The loop
+ * short-circuits as soon as this many unique IDs have been collected, so a
+ * small limit avoids draining every KV list page for large deployments.
  */
 export async function listStoredUserIds(
   kv: KVNamespace,
-  pieceName: string
+  pieceName: string,
+  limit?: number,
 ): Promise<string[]> {
   const prefix = kvPrefix(pieceName);
   const userIds = new Set<string>();
@@ -71,6 +76,7 @@ export async function listStoredUserIds(
       if (!key.name.startsWith(prefix)) continue;
       const userId = key.name.slice(prefix.length);
       if (userId) userIds.add(userId);
+      if (limit !== undefined && userIds.size >= limit) return [...userIds];
     }
 
     if (page.list_complete || !page.cursor) break;

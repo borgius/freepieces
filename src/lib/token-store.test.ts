@@ -40,4 +40,24 @@ describe('listStoredUserIds', () => {
 
     await expect(listStoredUserIds(kv, 'gmail')).resolves.toEqual([]);
   });
+
+  it('short-circuits once the limit is reached and does not page further', async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        keys: [
+          { name: 'token:gmail:alice@example.com' },
+          { name: 'token:gmail:bob@example.com' },
+          { name: 'token:gmail:charlie@example.com' },
+        ],
+        list_complete: false,
+        cursor: 'page-2',
+      })
+      .mockResolvedValueOnce({ keys: [{ name: 'token:gmail:dana@example.com' }], list_complete: true, cursor: '' });
+
+    const kv = { list } as unknown as KVNamespace;
+    const out = await listStoredUserIds(kv, 'gmail', 2);
+    expect(out).toEqual(['alice@example.com', 'bob@example.com']);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
 });

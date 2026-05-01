@@ -55,8 +55,8 @@ export function createFreepiecesWorker(): FreepiecesWorker {
   app.get('/health', (c) => c.json({ ok: true, service: 'freepieces', version: '0.1.0' }));
 
   // ── List pieces ─────────────────────────────────────────────────────────
-  app.get('/pieces', (c) =>
-    c.json(
+  app.get('/pieces', (c) => {
+    const res = c.json(
       listPieces().map((p) => ({
         name: p.name,
         displayName: p.displayName,
@@ -75,8 +75,12 @@ export function createFreepiecesWorker(): FreepiecesWorker {
           type: t.type,
         })),
       })),
-    ),
-  );
+    );
+    // Piece metadata only changes on deploy. Short cache lets repeated
+    // client polls (admin UI, discovery) skip the full serialization path.
+    res.headers.set('cache-control', 'public, max-age=60');
+    return res;
+  });
 
   // ── Domain sub-apps ─────────────────────────────────────────────────────
   app.route('/', openauthApi);

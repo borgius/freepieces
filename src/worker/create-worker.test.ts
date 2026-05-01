@@ -99,4 +99,18 @@ describe('createFreepiecesWorker()', () => {
     const body = await res.json() as Array<{ name: string }>;
     expect(body).toEqual([]);
   });
+
+  it('sets a short Cache-Control header on /pieces', async () => {
+    const { createFreepiecesWorker } = await import('./create-worker.js');
+    const worker = createFreepiecesWorker();
+
+    const res = await worker.fetch(
+      new Request('https://freepieces.example.workers.dev/pieces'),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+  });
 });

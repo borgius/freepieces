@@ -88,15 +88,26 @@ export async function verifySlackSignature(
   return timingSafeEqual(computed, signature);
 }
 
-/** Load all subscriptions for a piece from KV. */
+/** Load all subscriptions for a piece from KV. Pages through all keys, fetches in parallel. */
 export async function listSubscriptions(kv: KVNamespace, piece: string): Promise<WebhookSubscription[]> {
-  const { keys } = await kv.list({ prefix: SUB_PREFIX(piece) });
+  const prefix = SUB_PREFIX(piece);
+  const names: string[] = [];
+  let cursor: string | undefined;
+
+  // Walk every page so callers don't silently miss subs past the first KV list page.
+  while (true) {
+    const page = await kv.list(cursor ? { prefix, cursor } : { prefix });
+    for (const key of page.keys) names.push(key.name);
+    if (page.list_complete || !page.cursor) break;
+    cursor = page.cursor;
+  }
+
+  // Fetch all records in parallel instead of sequentially.
+  const raws = await Promise.all(names.map((name) => kv.get(name)));
   const subs: WebhookSubscription[] = [];
-  for (const key of keys) {
-    const raw = await kv.get(key.name);
-    if (raw) {
-      try { subs.push(JSON.parse(raw) as WebhookSubscription); } catch { /* skip corrupt */ }
-    }
+  for (const raw of raws) {
+    if (!raw) continue;
+    try { subs.push(JSON.parse(raw) as WebhookSubscription); } catch { /* skip corrupt */ }
   }
   return subs;
 }
@@ -123,19 +134,29 @@ export async function dispatchWebhook(
   env: Env,
 ): Promise<void> {
   const subs = await listSubscriptions(requireKVBinding(env, 'TOKEN_STORE'), pieceName);
+
+  // Cache auth resolution per (userId, pieceToken) pair so 100 subs from the
+  // same user don't each trigger a KV read + AES-GCM decrypt + refresh check.
+  const authCache = new Map<string, Promise<Record<string, string> | undefined>>();
+  function authFor(userId: string | undefined, pieceToken: string | undefined): Promise<Record<string, string> | undefined> {
+    const key = `${userId ?? ''}|${pieceToken ?? ''}`;
+    const cached = authCache.get(key);
+    if (cached) return cached;
+    const pending = resolveApRuntimeAuth(pieceName, piece, env, userId, pieceToken);
+    authCache.set(key, pending);
+    return pending;
+  }
+
   await Promise.allSettled(
     subs.map(async (sub) => {
       const triggerDef = getTrigger(pieceName, sub.trigger);
       if (!triggerDef) return;
 
-      let auth = await resolveApRuntimeAuth(
-        pieceName,
-        piece,
-        env,
+      const baseAuth = await authFor(
         sub.userId ?? sub.bearerToken,
         sub.pieceToken ?? sub.bearerToken,
       );
-      if (sub.pieceAuthProps) auth = { ...auth, ...sub.pieceAuthProps };
+      const auth = sub.pieceAuthProps ? { ...baseAuth, ...sub.pieceAuthProps } : baseAuth;
 
       let events: unknown[];
       try {

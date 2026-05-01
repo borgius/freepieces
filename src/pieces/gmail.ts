@@ -85,6 +85,27 @@ async function getUserEmail(auth: GmailAuth): Promise<string> {
   return profile.emailAddress;
 }
 
+// ─── Header / recipient helpers ───────────────────────────────────────────────
+
+/** Build a lowercase-keyed header map from Gmail's `[{name,value}, ...]` shape. */
+export function headersToMap(headers: GmailHeader[] | undefined): Record<string, string> {
+  const map: Record<string, string> = {};
+  if (!headers) return map;
+  for (const h of headers) map[h.name.toLowerCase()] = h.value;
+  return map;
+}
+
+/** Parse a comma-separated header like `to:` into trimmed recipients, dropping the current user. */
+export function parseRecipients(headerValue: string | undefined, excludeEmail: string): string[] {
+  if (!headerValue) return [];
+  const out: string[] = [];
+  for (const raw of headerValue.split(',')) {
+    const email = raw.trim();
+    if (email && !email.includes(excludeEmail)) out.push(email);
+  }
+  return out;
+}
+
 // ─── MIME helpers ─────────────────────────────────────────────────────────────
 
 /** Base64url-encode arbitrary bytes without any native Buffer dependency. */
@@ -202,8 +223,7 @@ function extractBodyParts(part: GmailPart): { text?: string; html?: string } {
 function parseFullMessage(msg: Record<string, unknown>): Record<string, unknown> {
   const payload = msg.payload as GmailPart | undefined;
   if (!payload) return msg;
-  const headers: GmailHeader[] = (payload as unknown as { headers?: GmailHeader[] }).headers ?? [];
-  const hm = Object.fromEntries(headers.map(h => [h.name.toLowerCase(), h.value]));
+  const hm = headersToMap((payload as unknown as { headers?: GmailHeader[] }).headers);
   const { text, html } = extractBodyParts(payload);
   return {
     id: msg.id, threadId: msg.threadId, labelIds: msg.labelIds,
@@ -337,7 +357,7 @@ async function replyToEmail(ctx: PieceActionContext): Promise<unknown> {
     tok, `/users/me/messages/${p.message_id}?format=full`
   ) as Record<string, unknown>;
   const payload = orig.payload as { headers?: GmailHeader[] };
-  const hm = Object.fromEntries((payload?.headers ?? []).map(h => [h.name.toLowerCase(), h.value]));
+  const hm = headersToMap(payload?.headers);
 
   const currentUserEmail = await getUserEmail(tok);
   const toList: string[] = [];
@@ -346,8 +366,8 @@ async function replyToEmail(ctx: PieceActionContext): Promise<unknown> {
   if (p.reply_type === 'reply_all') {
     const replyTarget = hm['reply-to'] || hm['from'];
     if (replyTarget) toList.push(replyTarget);
-    if (hm['to']) hm['to'].split(',').map((e: string) => e.trim()).filter((e: string) => !e.includes(currentUserEmail)).forEach((e: string) => toList.push(e));
-    if (hm['cc']) hm['cc'].split(',').map((e: string) => e.trim()).filter((e: string) => !e.includes(currentUserEmail)).forEach((e: string) => ccList.push(e));
+    toList.push(...parseRecipients(hm['to'], currentUserEmail));
+    ccList.push(...parseRecipients(hm['cc'], currentUserEmail));
   } else {
     const target = hm['reply-to'] || hm['from'];
     if (target) toList.push(target);
@@ -382,7 +402,7 @@ async function createDraftReply(ctx: PieceActionContext): Promise<unknown> {
     tok, `/users/me/messages/${p.message_id}?format=full`
   ) as Record<string, unknown>;
   const payload = orig.payload as { headers?: GmailHeader[] };
-  const hm = Object.fromEntries((payload?.headers ?? []).map(h => [h.name.toLowerCase(), h.value]));
+  const hm = headersToMap(payload?.headers);
 
   const currentUserEmail = await getUserEmail(tok);
   const toList: string[] = [];
@@ -391,8 +411,8 @@ async function createDraftReply(ctx: PieceActionContext): Promise<unknown> {
   if (p.reply_type === 'reply_all') {
     const replyTarget = hm['reply-to'] || hm['from'];
     if (replyTarget) toList.push(replyTarget);
-    if (hm['to']) hm['to'].split(',').map((e: string) => e.trim()).filter((e: string) => !e.includes(currentUserEmail)).forEach((e: string) => toList.push(e));
-    if (hm['cc']) hm['cc'].split(',').map((e: string) => e.trim()).filter((e: string) => !e.includes(currentUserEmail)).forEach((e: string) => ccList.push(e));
+    toList.push(...parseRecipients(hm['to'], currentUserEmail));
+    ccList.push(...parseRecipients(hm['cc'], currentUserEmail));
   } else {
     const replyTarget = hm['reply-to'] || hm['from'];
     if (replyTarget) toList.push(replyTarget);
@@ -692,8 +712,7 @@ function extractAttachments(part: GmailPart, result: ParsedAttachment[] = []): P
 }
 
 function buildMessageOutput(msg: RawMessage): Record<string, unknown> {
-  const headers: GmailHeader[] = (msg.payload as unknown as { headers?: GmailHeader[] })?.headers ?? [];
-  const hm = Object.fromEntries(headers.map(h => [h.name.toLowerCase(), h.value]));
+  const hm = headersToMap((msg.payload as unknown as { headers?: GmailHeader[] })?.headers);
   const { text, html } = msg.payload ? extractBodyParts(msg.payload) : {};
   const attachments = msg.payload ? extractAttachments(msg.payload) : [];
   return {
