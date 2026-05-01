@@ -68,3 +68,12 @@ export function requireKVBinding(env: Env, name: string): KVNamespace {
   if (!v) throw new Error(`Required KV binding not configured: FREEPIECES_${name} / FP_${name} / ${name}`);
   return v;
 }
+
+/**
+ * Read a boolean env var.
+ * Returns true when the first defined variant is "true", "1", or "yes" (case-insensitive).
+ */
+export function getEnvBool(env: Env, name: string): boolean {
+  const v = getEnvStr(env, name);
+  return v === 'true' || v === '1' || v === 'yes';
+}

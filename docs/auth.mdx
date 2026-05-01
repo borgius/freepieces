@@ -406,12 +406,27 @@ You can still send `X-User-Id` and `X-Piece-Token` explicitly. If you do, those 
 
 This is why simple local examples can work with just one bearer token.
 
+### No-auth mode: `FREEPIECES_DISABLE_AUTH` is set
+
+Set `FREEPIECES_DISABLE_AUTH = "true"` (also accepted: `FP_DISABLE_AUTH`, `DISABLE_AUTH`) in `wrangler.toml` to skip caller auth entirely for local development.
+
+```toml
+# wrangler.toml — local dev only
+[vars]
+FREEPIECES_DISABLE_AUTH = "true"
+```
+
+In this mode the worker accepts any request on the runtime routes without an `Authorization` header. `X-User-Id`, `X-Piece-Token`, and `X-Piece-Auth` headers are still respected when provided.
+
+**Safety guarantee**: `FREEPIECES_DISABLE_AUTH` is ignored whenever `FREEPIECES_RUN_API_KEY` is configured. Set both together in a deployed environment and the API key wins — there is no accidental production bypass.
+
 ### Header matrix
 
 | Mode | `Authorization` value | `X-User-Id` | `X-Piece-Token` | `X-Piece-Auth` | Typical use |
 | --- | --- | --- | --- | --- | --- |
 | deployed secured worker | `RUN_API_KEY` | optional but common | optional: single-prop credential | optional: multi-prop CUSTOM_AUTH credentials | production |
 | local dev without `RUN_API_KEY` | user ID or raw token fallback | optional override | optional override | optional override | fast local testing |
+| local dev with `DISABLE_AUTH` | not required | optional | optional | optional | zero-config local dev |
 
 ### What `userId` actually is
 

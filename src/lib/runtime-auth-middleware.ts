@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { resolveRuntimeRequestAuth, type RuntimeRequestCredentials } from './request-auth';
-import { getEnvStr } from './env';
+import { getEnvBool, getEnvStr } from './env';
 import { createAuthIssuer } from '../auth/issuer';
 import type { Env } from '../framework/types';
 
@@ -39,6 +39,7 @@ export const runtimeAuth = createMiddleware<{
     getEnvStr(c.env, 'RUN_API_KEY'),
     new URL(c.req.url).origin,
     issuerFetch,
+    getEnvBool(c.env, 'DISABLE_AUTH'),
   );
   if (!result.ok) {
     throw new HTTPException(result.status, { message: result.error });

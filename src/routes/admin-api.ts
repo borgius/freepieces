@@ -23,7 +23,7 @@ import {
   pieceSupportsStoredUsers,
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
-import { requireEnvStr, requireKVBinding } from '../lib/env';
+import { requireEnvStr, requireKVBinding, getEnvBool } from '../lib/env';
 
 const authClientCache = new WeakMap<object, ReturnType<typeof createAuthClient>>();
 
@@ -129,6 +129,14 @@ adminApi.use('*', async (c, next) => {
       c.set('session', { sub: cfIdentity.sub || cfIdentity.email, email: cfIdentity.email });
       return next();
     }
+  }
+
+  // Local-dev auth bypass: skip admin session check when DISABLE_AUTH is set.
+  // Admin auth and runtime API-key auth are independent, so RUN_API_KEY being
+  // set does not override this flag.
+  if (getEnvBool(c.env, 'DISABLE_AUTH')) {
+    c.set('session', { sub: 'local', email: 'local@dev' });
+    return next();
   }
 
   const accessToken = getCookie(c, COOKIE_NAME);

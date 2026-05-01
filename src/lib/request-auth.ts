@@ -78,11 +78,24 @@ export async function resolveRuntimeRequestAuth(
   runApiKey?: string,
   publicUrl?: string,
   issuerFetch?: typeof fetch,
+  disableAuth?: boolean,
 ): Promise<RuntimeRequestAuthResult> {
   const authHeader = headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ')
     ? authHeader.slice(7)
     : undefined;
+
+  // Local-dev auth bypass: only honoured when RUN_API_KEY is not configured.
+  if (disableAuth && !runApiKey) {
+    return {
+      ok: true,
+      credentials: {
+        userId: headers.get('x-user-id') ?? undefined,
+        pieceToken: headers.get('x-piece-token') ?? undefined,
+        pieceAuthProps: parsePieceAuthHeader(headers.get('x-piece-auth')),
+      },
+    };
+  }
 
   // Mode 1: Static API key
   if (runApiKey && bearerToken && timingSafeEqual(bearerToken, runApiKey)) {

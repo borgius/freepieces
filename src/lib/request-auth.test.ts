@@ -147,4 +147,48 @@ describe('resolveRuntimeRequestAuth', () => {
       });
     });
   });
+
+  describe('DISABLE_AUTH', () => {
+    it('bypasses auth entirely when disableAuth is true and RUN_API_KEY is absent', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers(),
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+
+      expect(result).toEqual({ ok: true, credentials: {} });
+    });
+
+    it('still surfaces X-User-Id and X-Piece-Token headers when auth is disabled', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers({
+          'x-user-id': 'local-user',
+          'x-piece-token': 'local-token',
+        }),
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: { userId: 'local-user', pieceToken: 'local-token' },
+      });
+    });
+
+    it('ignores disableAuth when RUN_API_KEY is configured', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers(),
+        'fp_sk_secret',
+        undefined,
+        undefined,
+        true,
+      );
+
+      expect(result).toEqual({ ok: false, status: 401, error: 'Unauthorized' });
+    });
+  });
 });

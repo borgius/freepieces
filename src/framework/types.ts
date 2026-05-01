@@ -59,6 +59,22 @@ export interface Env {
   /** Legacy un-prefixed name (backward compat). */
   RUN_API_KEY?: string;
 
+  // ── Disable auth (local dev only) ────────────────────────────────────────
+  /**
+   * Set to "true" or "1" to skip runtime caller auth on /run, /trigger, and
+   * /subscriptions. Ignored when FREEPIECES_RUN_API_KEY is configured, so it
+   * is safe to leave in wrangler.toml for local dev without risking accidental
+   * production bypass.
+   *
+   * Add to [vars] in wrangler.toml (local dev only):
+   *   FREEPIECES_DISABLE_AUTH = "true"
+   */
+  FREEPIECES_DISABLE_AUTH?: string;
+  /** Short-prefix alias. */
+  FP_DISABLE_AUTH?: string;
+  /** Legacy un-prefixed name (backward compat). */
+  DISABLE_AUTH?: string;
+
   // ── Admin / invite-only email lists ──────────────────────────────────────
   /** Comma-separated admin emails (canonical). */
   FREEPIECES_ADMIN_EMAILS?: string;
