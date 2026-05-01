@@ -430,6 +430,137 @@ export function TriggerUsageTab({
 }
 
 // --------------------------------------------------------------------------
+// MCP tab — per-piece server config for common AI clients
+// --------------------------------------------------------------------------
+
+function buildMcpEndpoint(pieceName: string): string {
+  return `${baseUrl()}/mcp/${pieceName}`;
+}
+
+function buildMcpConfigGHCopilot(pieceName: string): string {
+  return JSON.stringify(
+    {
+      mcp: {
+        servers: {
+          [pieceName]: {
+            type: 'http',
+            url: buildMcpEndpoint(pieceName),
+            headers: {
+              Authorization: 'Bearer <FREEPIECES_RUN_API_KEY>',
+              'X-User-Id': '<FREEPIECES_USER_ID>',
+              'X-Piece-Token': '<FREEPIECES_PIECE_TOKEN>',
+            },
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function buildMcpConfigClaudeCode(pieceName: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        [pieceName]: {
+          type: 'http',
+          url: buildMcpEndpoint(pieceName),
+          headers: {
+            Authorization: 'Bearer <FREEPIECES_RUN_API_KEY>',
+            'X-User-Id': '<FREEPIECES_USER_ID>',
+            'X-Piece-Token': '<FREEPIECES_PIECE_TOKEN>',
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function buildMcpConfigCodex(pieceName: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        [pieceName]: {
+          type: 'http',
+          url: buildMcpEndpoint(pieceName),
+          headers: {
+            Authorization: 'Bearer <FREEPIECES_RUN_API_KEY>',
+            'X-User-Id': '<FREEPIECES_USER_ID>',
+            'X-Piece-Token': '<FREEPIECES_PIECE_TOKEN>',
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+export function ItemMcpTab({ pieceName }: { pieceName: string }) {
+  const endpoint = buildMcpEndpoint(pieceName);
+  return (
+    <VStack align="stretch" gap={5}>
+      <Box>
+        <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+          MCP Endpoint
+        </Text>
+        <Text fontSize="xs" color="gray.600" mb={2}>
+          All <code>{pieceName}</code> actions are available as MCP tools at this endpoint.
+        </Text>
+        <HStack bg="blue.50" borderWidth="1px" borderColor="blue.200" rounded="md" px={3} py={2} gap={2}>
+          <Box flex={1} fontFamily="mono" fontSize="xs" color="blue.700" wordBreak="break-all">
+            {endpoint}
+          </Box>
+          <ClipboardRoot value={endpoint} timeout={1500}>
+            <ClipboardTrigger asChild>
+              <Box as="button" color="gray.400" _hover={{ color: 'blue.500' }} flexShrink={0} title="Copy endpoint">
+                <Copy size={12} />
+              </Box>
+            </ClipboardTrigger>
+          </ClipboardRoot>
+        </HStack>
+      </Box>
+
+      <Box>
+        <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+          GitHub Copilot
+        </Text>
+        <Text fontSize="xs" color="gray.600" mb={2}>
+          Add to <code>settings.json</code> in VS Code (User or Workspace):
+        </Text>
+        <CodeBlock label="settings.json" code={buildMcpConfigGHCopilot(pieceName)} />
+      </Box>
+
+      <Box>
+        <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+          Claude Code
+        </Text>
+        <Text fontSize="xs" color="gray.600" mb={2}>
+          Add via CLI, or add to <code>.claude.json</code> in your project:
+        </Text>
+        <VStack align="stretch" gap={2}>
+          <CodeBlock label="CLI" code={`claude mcp add --transport http ${pieceName} ${endpoint}`} />
+          <CodeBlock label=".claude.json" code={buildMcpConfigClaudeCode(pieceName)} />
+        </VStack>
+      </Box>
+
+      <Box>
+        <Text fontSize="xs" fontWeight="semibold" color="gray.500" textTransform="uppercase" letterSpacing="wider" mb={1}>
+          Codex
+        </Text>
+        <Text fontSize="xs" color="gray.600" mb={2}>
+          Add to <code>~/.codex/config.json</code>:
+        </Text>
+        <CodeBlock label="~/.codex/config.json" code={buildMcpConfigCodex(pieceName)} />
+      </Box>
+    </VStack>
+  );
+}
+
+// --------------------------------------------------------------------------
 // PropTable — shows structured params
 // --------------------------------------------------------------------------
 

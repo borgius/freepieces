@@ -22,7 +22,7 @@ import { ChevronDown, ChevronRight, Copy, Link2, ScanSearch } from 'lucide-react
 import type { LucideIcon } from 'lucide-react';
 import type { PieceAction, PieceTrigger, PropDef } from '../lib/api';
 
-import { ActionUsageTab, baseUrl, PropTable, TriggerUsageTab } from './ItemUsage';
+import { ActionUsageTab, baseUrl, ItemMcpTab, PropTable, TriggerUsageTab } from './ItemUsage';
 
 // --------------------------------------------------------------------------
 // Single action / trigger row with expand/collapse
@@ -136,6 +136,7 @@ function ItemRow({
                 <Tabs.List borderBottomWidth="1px" borderColor="gray.100" mb={3}>
                   <Tabs.Trigger value="params">Params {hasParams ? `(${paramCount})` : ''}</Tabs.Trigger>
                   <Tabs.Trigger value="usage">Usage</Tabs.Trigger>
+                  <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
                 </Tabs.List>
                 <Tabs.Content value="params">
                   {hasParams
@@ -148,6 +149,9 @@ function ItemRow({
                     ? <TriggerUsageTab pieceName={pieceName} triggerName={name} triggerType={triggerType ?? 'POLLING'} props={props} />
                     : <ActionUsageTab pieceName={pieceName} actionName={name} props={props} />
                   }
+                </Tabs.Content>
+                <Tabs.Content value="mcp">
+                  <ItemMcpTab pieceName={pieceName} />
                 </Tabs.Content>
               </Tabs.Root>
             </DialogBody>
