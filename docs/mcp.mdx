@@ -1,0 +1,126 @@
+export const meta = {
+  slug: 'mcp',
+  title: 'MCP',
+  summary: 'Expose every registered piece as a Model Context Protocol server with one tool per action.',
+  section: 'runtime',
+  order: 45,
+  estimatedTime: '10 min',
+}
+
+# MCP in freepieces
+
+`freepieces` automatically exposes every registered piece as a Model Context Protocol server.
+
+Each piece gets its own endpoint:
+
+```text
+POST /mcp/:piece
+```
+
+Every action on the piece becomes an MCP tool. You do not need to write a separate MCP adapter for each piece.
+
+## Auth
+
+MCP uses the same runtime auth contract as `/run`, `/trigger`, and `/subscriptions`.
+
+When `FREEPIECES_RUN_API_KEY` is configured:
+
+```http
+Authorization: Bearer <FREEPIECES_RUN_API_KEY>
+X-User-Id: <your-user-id>
+X-Piece-Token: <provider-token>
+X-Piece-Auth: {"prop":"value"}
+```
+
+Meaning:
+
+- `Authorization` authenticates the MCP caller to the worker.
+- `X-User-Id` selects the stored OAuth2 token for OAuth-backed pieces.
+- `X-Piece-Token` passes a direct credential for API-key or single-prop `CUSTOM_AUTH` pieces.
+- `X-Piece-Auth` passes multiple named direct credentials for multi-prop `CUSTOM_AUTH` pieces.
+
+For local dev without `FREEPIECES_RUN_API_KEY`, the bearer token remains the fallback for both `X-User-Id` and `X-Piece-Token`.
+
+## MCP client config
+
+Use the piece endpoint as a streamable HTTP MCP server URL.
+
+```json
+{
+  "mcpServers": {
+    "gmail": {
+      "url": "https://<your-worker>.workers.dev/mcp/gmail",
+      "headers": {
+        "Authorization": "Bearer ${FREEPIECES_RUN_API_KEY}",
+        "X-User-Id": "${FREEPIECES_USER_ID}",
+        "X-Piece-Token": "${FREEPIECES_PIECE_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+For OAuth2 pieces, set `FREEPIECES_USER_ID` to the same lookup key used when connecting or seeding the OAuth token.
+
+For direct-token pieces, set `FREEPIECES_PIECE_TOKEN` to the provider credential. For multi-prop custom auth, send `X-Piece-Auth` instead.
+
+## List tools
+
+```bash
+curl "https://<your-worker>.workers.dev/mcp/gmail" \
+  -X POST \
+  -H "Authorization: Bearer $FREEPIECES_RUN_API_KEY" \
+  -H "X-User-Id: $FREEPIECES_USER_ID" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list"
+  }'
+```
+
+The response contains one tool per action. Tool names are the same action names used by `/run/:piece/:action`.
+
+## Call a tool
+
+```bash
+curl "https://<your-worker>.workers.dev/mcp/example-apikey" \
+  -X POST \
+  -H "Authorization: Bearer $FREEPIECES_RUN_API_KEY" \
+  -H "X-Piece-Token: $FREEPIECES_PIECE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "ping",
+      "arguments": {
+        "message": "hello"
+      }
+    }
+  }'
+```
+
+Tool call results include both MCP `content` text and `structuredContent` with the original action result.
+
+## Supported methods
+
+| Method | Description |
+| --- | --- |
+| `initialize` | Returns server metadata and tool capability support |
+| `ping` | Returns an empty success result |
+| `tools/list` | Lists the selected piece's actions as MCP tools |
+| `tools/call` | Runs one selected action with `params.arguments` as props |
+
+## Discoverability
+
+`GET /pieces` includes `mcpEndpoint` for each registered piece.
+
+Authenticated callers can also inspect one piece endpoint with:
+
+```text
+GET /mcp/:piece
+```
+
+That returns the endpoint path, supported protocol version, and generated tool list.

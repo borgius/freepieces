@@ -24,6 +24,7 @@ import {
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Copy, KeyRound, Trash2, Users, Webhook, Zap } from 'lucide-react';
 import { CollapsibleSection } from './ItemSection';
+import { McpSection } from './PieceMcpSection';
 
 const AUTH_PALETTE: Record<string, string> = {
   oauth2: 'purple',
@@ -214,6 +215,7 @@ function SecretsSection({ groups }: { groups: SecretGroup[] }) {
     </Box>
   );
 }
+
 
 function UsersSection({ pieceName, isOAuth2, hasAutoUserId }: { pieceName: string; isOAuth2: boolean; hasAutoUserId: boolean }) {
   const [open, setOpen] = useState(false);
@@ -489,6 +491,8 @@ export function PieceCard({ piece, onToggle }: Props) {
           {piece.description ?? 'No description provided.'}
         </Text>
 
+        <McpSection piece={piece} />
+
         {piece.actions.length > 0 && (
           <CollapsibleSection
             title="Actions"
@@ -542,4 +546,3 @@ export function PieceCard({ piece, onToggle }: Props) {
     </Card.Root>
   );
 }
-
