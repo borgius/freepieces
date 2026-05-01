@@ -215,7 +215,7 @@ Then call the pieces like any other action:
 curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-d1/query" \
   -H "Authorization: Bearer $RUN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "sql": "select * from users where id = ?", "params": ["your-user-id"] }'
+  -d '{ "sql": "select * from users where id = ?", "params": ["<your-user-id>"] }'
 
 curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-r2/put_object" \
   -H "Authorization: Bearer $RUN_API_KEY" \

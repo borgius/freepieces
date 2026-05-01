@@ -67,7 +67,7 @@ Query rows with placeholders and `params`:
 curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-d1/query" \
   -H "Authorization: Bearer $RUN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "sql": "select * from users where id = ?", "params": ["your-user-id"] }'
+  -d '{ "sql": "select * from users where id = ?", "params": ["<your-user-id>"] }'
 ```
 
 Run a write or DDL statement with `execute`:
