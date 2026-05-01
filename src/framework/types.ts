@@ -115,6 +115,21 @@ export interface Env {
   FREEPIECES_WORKER_NAME?: string;
   FP_WORKER_NAME?: string;
 
+  // ── Cloudflare Access ─────────────────────────────────────────────────────
+  /**
+   * CF Access team domain, e.g. "yourteam.cloudflareaccess.com".
+   * When set alongside CF_ACCESS_AUD_FREEPIECES, the admin API will accept a
+   * valid `Cf-Access-Jwt-Assertion` header as an alternative to the admin
+   * session cookie, so users authenticated via CF Access do not need to log in
+   * a second time via OpenAuth.
+   */
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  /**
+   * CF Access Application ID (AUD claim) for the freepieces worker.
+   * Set via `wrangler secret put CF_ACCESS_AUD_FREEPIECES`.
+   */
+  CF_ACCESS_AUD_FREEPIECES?: string;
+
   // ── Cloudflare Queue / static-assets bindings ─────────────────────────────
   /** Cloudflare Queue for async trigger processing. */
   TRIGGER_QUEUE?: Queue;

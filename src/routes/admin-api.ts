@@ -12,6 +12,7 @@ import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
 import { makeIssuerFetch } from '../lib/auth-issuer';
 import { fastVerify } from '../lib/fast-verify';
+import { verifyCfAccessJwt } from '../lib/cf-access';
 import {
   GLOBAL_SECRET_DEFS,
   GLOBAL_SECRET_KEY_SET,
@@ -116,6 +117,18 @@ adminApi.use('*', async (c, next) => {
   // Callback, logout, and login-url are unauthenticated
   if (c.req.path.endsWith('/callback') || c.req.path.endsWith('/logout') || c.req.path.endsWith('/login-url')) {
     return next();
+  }
+
+  // CF Access fast path: if a valid CF Access JWT is present, bypass the cookie
+  // check. Validates the JWT directly so no internal trust header is required.
+  const cfTeamDomain = c.env.CF_ACCESS_TEAM_DOMAIN;
+  const cfAud = c.env.CF_ACCESS_AUD_FREEPIECES;
+  if (cfTeamDomain && cfAud) {
+    const cfIdentity = await verifyCfAccessJwt(c.req.raw, cfTeamDomain, cfAud);
+    if (cfIdentity) {
+      c.set('session', { sub: cfIdentity.sub || cfIdentity.email, email: cfIdentity.email });
+      return next();
+    }
   }
 
   const accessToken = getCookie(c, COOKIE_NAME);
