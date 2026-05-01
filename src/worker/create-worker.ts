@@ -11,6 +11,7 @@ import { listPieces, getPiece } from '../framework/registry.js';
 import { dispatchWebhook } from '../lib/webhook.js';
 import adminApi from '../routes/admin-api.js';
 import authApi from '../routes/auth-api.js';
+import mcpApi from '../routes/mcp-api.js';
 import openauthApi from '../routes/openauth-api.js';
 import runtimeApi from '../routes/runtime-api.js';
 import webhookApi from '../routes/webhook-api.js';
@@ -63,6 +64,7 @@ export function createFreepiecesWorker(): FreepiecesWorker {
         description: p.description,
         version: p.version,
         auth: p.auth,
+        mcpEndpoint: p.mcpEndpoint,
         actions: p.actions.map((a) => ({
           name: a.name,
           displayName: a.displayName,
@@ -86,6 +88,7 @@ export function createFreepiecesWorker(): FreepiecesWorker {
   app.route('/', openauthApi);
   app.route('/auth', authApi);
   app.route('/', runtimeApi);
+  app.route('/', mcpApi);
 
   // ── Admin SPA redirect ──────────────────────────────────────────────────
   app.get('/', (c) => c.redirect('/admin/', 301));

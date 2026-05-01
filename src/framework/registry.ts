@@ -242,6 +242,7 @@ export interface PieceSummaryEntry {
   actions: Array<{ name: string; displayName: string; description?: string; props?: Record<string, PropDefinition> }>;
   triggers: Array<{ name: string; displayName: string; description?: string; type: string; props?: Record<string, PropDefinition> }>;
   secrets: SecretGroup[];
+  mcpEndpoint: string;
 }
 
 /** Derive secrets for a piece, memoized per registry version. */
@@ -284,6 +285,7 @@ export function listPieces(): PieceSummaryEntry[] {
           props: t.props,
         })),
         secrets: deriveSecrets(stored),
+        mcpEndpoint: `/mcp/${d.name}`,
       };
     }
     // AP piece
@@ -308,6 +310,7 @@ export function listPieces(): PieceSummaryEntry[] {
         props: extractProps(t.props),
       })),
       secrets: deriveSecrets(stored),
+      mcpEndpoint: `/mcp/${name}`,
     };
   });
 

@@ -1,0 +1,141 @@
+export const meta = {
+  slug: 'cloudflare-bindings',
+  title: 'Cloudflare binding pieces',
+  summary: 'Use bundled D1, R2, Queue, and Workflow pieces with Worker bindings.',
+  section: 'runtime',
+  order: 46,
+  estimatedTime: '7 min',
+}
+
+# Cloudflare binding pieces
+
+`freepieces` includes native no-auth pieces for Cloudflare services that are already bound to the Worker.
+
+These pieces still use the normal runtime route:
+
+```text
+POST /run/:piece/:action
+```
+
+When `RUN_API_KEY` is configured, callers must still authenticate with `Authorization: Bearer <RUN_API_KEY>`. The pieces themselves do not need OAuth or direct piece credentials because they use Worker bindings.
+
+## Built-in binding pieces
+
+| Piece | Actions | Default binding |
+| --- | --- | --- |
+| `cloudflare-d1` | `query`, `first`, `execute` | `DB` |
+| `cloudflare-r2` | `put_object`, `get_object`, `delete_object`, `list_objects` | `BUCKET` |
+| `cloudflare-queue` | `send_message`, `send_batch` | `QUEUE` |
+| `cloudflare-workflow` | `create_instance`, `create_batch`, `get_status`, `pause_instance`, `resume_instance`, `terminate_instance`, `restart_instance`, `send_event` | `WORKFLOW` |
+
+If your Worker uses a different binding name, pass the override prop for that piece:
+
+- `databaseBinding` for D1
+- `bucketBinding` for R2
+- `queueBinding` for Queue
+- `workflowBinding` for Workflow
+
+## Wrangler bindings
+
+Add only the bindings you use:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "your-database"
+database_id = "${D1_DATABASE_ID}"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "your-bucket"
+
+[[queues.producers]]
+binding = "QUEUE"
+queue = "your-queue"
+
+[[workflows]]
+binding = "WORKFLOW"
+name = "your-workflow"
+class_name = "YourWorkflow"
+```
+
+## D1 examples
+
+Query rows with placeholders and `params`:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-d1/query" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "sql": "select * from users where id = ?", "params": ["<your-user-id>"] }'
+```
+
+Run a write or DDL statement with `execute`:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-d1/execute" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "sql": "insert into jobs(id, status) values (?, ?)", "params": ["job-id", "queued"] }'
+```
+
+## R2 examples
+
+Store and fetch text or JSON values:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-r2/put_object" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "key": "notes/hello.txt", "value": "hello", "contentType": "text/plain" }'
+
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-r2/get_object" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "key": "notes/hello.txt" }'
+```
+
+## Queue examples
+
+Send one message:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-queue/send_message" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "body": { "jobId": "job-id" }, "contentType": "json" }'
+```
+
+Send a batch:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-queue/send_batch" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "messages": [{ "body": { "jobId": "job-1" }, "contentType": "json" }, { "body": { "jobId": "job-2" }, "contentType": "json" }] }'
+```
+
+## Workflow examples
+
+Create a Workflow instance:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-workflow/create_instance" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "id": "job-id", "params": { "source": "queue" } }'
+```
+
+Read status or send an event:
+
+```bash
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-workflow/get_status" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "id": "job-id" }'
+
+curl -X POST "https://<your-worker>.workers.dev/run/cloudflare-workflow/send_event" \
+  -H "Authorization: Bearer $RUN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "id": "job-id", "type": "approved", "payload": { "approved": true } }'
+```

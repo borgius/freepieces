@@ -81,6 +81,7 @@ export interface PieceInfo {
   description: string | null;
   version: string;
   auth: PieceAuth;
+  mcpEndpoint: string;
   actions: PieceAction[];
   triggers: PieceTrigger[];
   secrets: SecretGroup[];

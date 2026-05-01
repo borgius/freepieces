@@ -204,6 +204,7 @@ adminApi.get('/pieces', async (c) => {
       description: p.description ?? null,
       version: p.version,
       auth: p.auth,
+      mcpEndpoint: p.mcpEndpoint,
       actions: p.actions.map((a) => ({
         name: a.name,
         displayName: a.displayName,
