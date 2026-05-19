@@ -7,9 +7,9 @@ import { Hono } from 'hono';
 import { timeout } from 'hono/timeout';
 import { getPiece, getTrigger } from '../framework/registry';
 import { runtimeAuth } from '../lib/runtime-auth-middleware';
-import { buildApContext, buildApTriggerContext } from '../lib/ap-context';
+import { buildApContext, buildApTriggerContext, buildNativeTriggerContext } from '../lib/ap-context';
 import { resolveNativeRuntimeAuth, resolveApRuntimeAuth, forceRefreshNativeAuth } from '../lib/auth-resolve';
-import type { Env, PieceTriggerContext } from '../framework/types';
+import type { Env } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
 
 const runtimeApi = new Hono<{
@@ -119,19 +119,23 @@ runtimeApi.post('/trigger/:piece/:trigger', async (c) => {
       let nativeAuth = await resolveNativeRuntimeAuth(pieceName, stored.def.auth, c.env, userId, pieceToken);
       if (pieceAuthProps) nativeAuth = { ...nativeAuth, ...pieceAuthProps };
 
-      const nativeCtx: PieceTriggerContext = {
-        auth: nativeAuth,
-        props: body.propsValue ?? {},
-        lastPollMs: typeof (body as Record<string, unknown>).lastPollMs === 'number'
-          ? (body as Record<string, unknown>).lastPollMs as number
-          : 0,
-        env: c.env,
-        refreshAuth: async () => {
+      const nativeCtx = buildNativeTriggerContext(
+        pieceName,
+        triggerName,
+        nativeAuth,
+        body.propsValue ?? {},
+        userId,
+        c.env,
+        async () => {
           const refreshed = await forceRefreshNativeAuth(pieceName, stored.def.auth, c.env, userId);
           if (!refreshed) return undefined;
           return pieceAuthProps ? { ...refreshed, ...pieceAuthProps } : refreshed;
         },
-      };
+      );
+      // Preserve backward-compatible lastPollMs from request body
+      if (typeof (body as Record<string, unknown>).lastPollMs === 'number') {
+        nativeCtx.lastPollMs = (body as Record<string, unknown>).lastPollMs as number;
+      }
       const events = await nativeTrigger.run(nativeCtx);
       return c.json({ ok: true, events });
     }
@@ -149,6 +153,7 @@ runtimeApi.post('/trigger/:piece/:trigger', async (c) => {
       body.propsValue ?? {},
       body.payload ?? {},
       c.env,
+      userId,
     );
     const events = await (trigger as { run(ctx: unknown): Promise<unknown[]> }).run(ctx);
     return c.json({ ok: true, events });

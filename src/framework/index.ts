@@ -1,6 +1,6 @@
 // Public framework surface for consumers — import from 'freepieces/framework'
-export { createPiece } from './piece.js';
-export { registerPiece, registerApPiece, getPiece, listPieces } from './registry.js';
+export { createPiece, createTrigger } from './piece.js';
+export { registerPiece, registerApPiece, getPiece, listPieces, isTriggerWebhookCapable } from './registry.js';
 export type {
   Env,
   PieceDefinition,
@@ -8,4 +8,6 @@ export type {
   ApPiece,
   ApTrigger,
   PieceTrigger,
+  TriggerStrategy,
+  TriggerStore,
 } from './types.js';

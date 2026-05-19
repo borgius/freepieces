@@ -5,8 +5,8 @@
  * from freepieces request data.
  */
 
-import type { Env, ApPiece } from '../framework/types';
-import { getEnvStr } from './env';
+import type { Env, ApPiece, PieceTriggerContext, TriggerStore } from '../framework/types';
+import { getEnvStr, requireKVBinding } from './env';
 
 /**
  * Build the execution context expected by @activepieces/pieces-framework
@@ -147,9 +147,78 @@ export function buildApContext(
 }
 
 /**
+ * Build a KV-backed trigger state store scoped to a piece/trigger/owner tuple.
+ *
+ * Keys are namespaced as `trigstate:{piece}:{trigger}:{userId}:{key}` so each
+ * subscription gets its own isolated persistent state (for example a poll
+ * cursor or webhook registration ID).
+ */
+export function buildTriggerStore(
+  env: Env,
+  piece: string,
+  trigger: string,
+  userId: string | undefined,
+): TriggerStore {
+  // Gracefully degrade when TOKEN_STORE is not configured (e.g. in test mocks
+  // that do not provision a KV namespace for trigger state).
+  let kv: KVNamespace | null = null;
+  try {
+    kv = requireKVBinding(env, 'TOKEN_STORE');
+  } catch {
+    kv = null;
+  }
+
+  const ns = `trigstate:${piece}:${trigger}:${userId ?? '_'}`;
+
+  return {
+    async get(key: string): Promise<unknown> {
+      if (!kv) return null;
+      const raw = await kv.get(`${ns}:${key}`);
+      if (!raw) return null;
+      try { return JSON.parse(raw) as unknown; } catch { return raw; }
+    },
+    async put(key: string, value: unknown): Promise<void> {
+      if (!kv) return;
+      await kv.put(`${ns}:${key}`, JSON.stringify(value));
+    },
+    async delete(key: string): Promise<void> {
+      if (!kv) return;
+      await kv.delete(`${ns}:${key}`);
+    },
+  };
+}
+
+/**
+ * Build a `PieceTriggerContext` for a native trigger with a real KV-backed
+ * store and the correct `webhookUrl` for this piece.  Use for WEBHOOK and
+ * APP_WEBHOOK lifecycle calls (`onEnable`, `onDisable`) and for POLLING
+ * triggers that need persistent cursor state.
+ */
+export function buildNativeTriggerContext(
+  piece: string,
+  trigger: string,
+  auth: Record<string, string> | undefined,
+  props: Record<string, unknown>,
+  userId: string | undefined,
+  env: Env,
+  refreshAuth?: () => Promise<Record<string, string> | undefined>,
+): PieceTriggerContext {
+  const publicUrl = getEnvStr(env, 'PUBLIC_URL') ?? '';
+  return {
+    auth,
+    props,
+    lastPollMs: 0,
+    env,
+    refreshAuth,
+    store: buildTriggerStore(env, piece, trigger, userId),
+    webhookUrl: `${publicUrl}/webhook/${piece}`,
+  };
+}
+
+/**
  * Build the execution context for an AP trigger's run() call.
- * Mirrors buildApContext and adds the `payload` and `app` fields expected
- * by APP_WEBHOOK, WEBHOOK, and POLLING triggers.
+ * Mirrors buildApContext and adds the `payload`, `app`, real KV-backed `store`,
+ * and `webhookUrl` fields expected by APP_WEBHOOK, WEBHOOK, and POLLING triggers.
  */
 export function buildApTriggerContext(
   pieceName: string,
@@ -158,17 +227,29 @@ export function buildApTriggerContext(
   propsValue: Record<string, unknown>,
   payload: unknown,
   env: Env,
+  userId?: string,
 ): unknown {
   const base = buildApContext(pieceName, piece, auth, propsValue, env) as Record<string, unknown>;
+  const publicUrl = getEnvStr(env, 'PUBLIC_URL') ?? '';
+
+  // Replace the no-op store from buildApContext with a real KV-backed store.
+  const kvStore = buildTriggerStore(env, pieceName, String(propsValue['__trigger'] ?? ''), userId);
+
   return {
     ...base,
+    store: {
+      get: (key: string) => kvStore.get(key),
+      put: (key: string, value: unknown) => kvStore.put(key, value),
+      delete: (key: string) => kvStore.delete(key),
+    },
+    webhookUrl: `${publicUrl}/webhook/${pieceName}`,
     payload: {
       body: payload,
       headers: {},
       method: 'POST',
     },
     app: {
-      /** No-op: freepieces doesn't manage webhook registration lifecycle. */
+      /** No-op: freepieces doesn't manage webhook registration lifecycle via AP app context. */
       createListeners: () => undefined,
     },
   };

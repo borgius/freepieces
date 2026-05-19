@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import worker from './worker';
 import type { Env } from './framework/types';
+import { registerPiece } from './framework/registry';
+import { createPiece } from './framework/piece';
+import { createTrigger } from './framework/piece';
 
 // Mock the OpenAuth client so admin session verification works in tests
 vi.mock('./auth/client', () => ({
@@ -302,5 +305,191 @@ describe('queue delivery for subscriptions', () => {
     expect(body.subscriptions).toHaveLength(1);
     expect(body.subscriptions[0].queueName).toBe('slack-new-message');
     expect(body.subscriptions[0].callbackUrl).toBeUndefined();
+  });
+});
+
+// --------------------------------------------------------------------------
+// Native WEBHOOK trigger parity
+// --------------------------------------------------------------------------
+
+const onEnableSpy = vi.fn().mockResolvedValue(undefined);
+const onDisableSpy = vi.fn().mockResolvedValue(undefined);
+const triggerRunSpy = vi.fn().mockResolvedValue([{ id: 'evt-1' }]);
+
+const nativeWebhookPiece = createPiece({
+  name: 'test-native-webhook',
+  displayName: 'Test Native Webhook Piece',
+  description: 'Test piece for native WEBHOOK trigger parity tests.',
+  version: '0.1.0',
+  auth: { type: 'apiKey', headerName: 'X-Api-Key' },
+  actions: [],
+  triggers: [
+    createTrigger({
+      name: 'new-event',
+      displayName: 'New Event',
+      description: 'Fires when an inbound webhook arrives.',
+      type: 'WEBHOOK',
+      props: {},
+      async run(ctx) {
+        return triggerRunSpy(ctx);
+      },
+      onEnable: onEnableSpy,
+      onDisable: onDisableSpy,
+    }),
+  ],
+});
+
+describe('native WEBHOOK trigger subscriptions', () => {
+  beforeAll(() => {
+    registerPiece(nativeWebhookPiece);
+  });
+
+  afterAll(() => {
+    onEnableSpy.mockClear();
+    onDisableSpy.mockClear();
+    triggerRunSpy.mockClear();
+  });
+
+  function createEnv(kv: KVNamespace): Env {
+    const env: Env = {
+      FREEPIECES_PUBLIC_URL: 'https://freepieces.example.workers.dev',
+      FREEPIECES_TOKEN_STORE: kv,
+      FREEPIECES_AUTH_STORE: new MemoryKv() as unknown as KVNamespace,
+      FREEPIECES_TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      FREEPIECES_ADMIN_EMAILS: 'admin@example.com',
+      FREEPIECES_RUN_API_KEY: 'fp_sk_test',
+    };
+    return env;
+  }
+
+  it('accepts subscription for a native WEBHOOK trigger', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnv(kv);
+
+    const response = await worker.fetch(
+      new Request('https://freepieces.example.workers.dev/subscriptions/test-native-webhook/new-event', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer fp_sk_test',
+          'X-Piece-Token': 'test-api-key-value',
+        },
+        body: JSON.stringify({ callbackUrl: 'https://example.com/cb', propsValue: {} }),
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as { ok: boolean; id: string; webhookUrl: string };
+    expect(body.ok).toBe(true);
+    expect(body.webhookUrl).toBe('https://freepieces.example.workers.dev/webhook/test-native-webhook');
+  });
+
+  it('calls onEnable when a native WEBHOOK subscription is created', async () => {
+    onEnableSpy.mockClear();
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnv(kv);
+
+    await worker.fetch(
+      new Request('https://freepieces.example.workers.dev/subscriptions/test-native-webhook/new-event', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer fp_sk_test',
+          'X-Piece-Token': 'test-api-key-value',
+        },
+        body: JSON.stringify({ callbackUrl: 'https://example.com/cb', propsValue: {} }),
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(onEnableSpy).toHaveBeenCalledOnce();
+    const ctx = onEnableSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(ctx).toHaveProperty('webhookUrl');
+  });
+
+  it('calls onDisable when a native WEBHOOK subscription is deleted', async () => {
+    onDisableSpy.mockClear();
+    const sub = {
+      id: 'sub-native-1',
+      trigger: 'new-event',
+      propsValue: {},
+      callbackUrl: 'https://example.com/cb',
+      pieceToken: 'test-api-key-value',
+      createdAt: new Date().toISOString(),
+    };
+    const kv = new MemoryKv({
+      'sub:test-native-webhook:sub-native-1': JSON.stringify(sub),
+    }) as unknown as KVNamespace;
+    const env = createEnv(kv);
+
+    const response = await worker.fetch(
+      new Request('https://freepieces.example.workers.dev/subscriptions/test-native-webhook/new-event/sub-native-1', {
+        method: 'DELETE',
+        headers: {
+          'Authorization': 'Bearer fp_sk_test',
+          'X-Piece-Token': 'test-api-key-value',
+        },
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(onDisableSpy).toHaveBeenCalledOnce();
+  });
+
+  it('rejects subscription for a native POLLING trigger (not webhook-capable)', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createEnv(kv);
+
+    // gmail has polling triggers — subscription should be rejected
+    const response = await worker.fetch(
+      new Request('https://freepieces.example.workers.dev/subscriptions/gmail/gmail_new_email_received', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer fp_sk_test',
+        },
+        body: JSON.stringify({ callbackUrl: 'https://example.com/cb', propsValue: {} }),
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error: string };
+    expect(body.error).toMatch(/does not support webhook/i);
+  });
+
+  it('accepts inbound webhook POST for native piece', async () => {
+    // Seed a subscription so there is something to dispatch to
+    const sub = {
+      id: 'sub-native-2',
+      trigger: 'new-event',
+      propsValue: {},
+      callbackUrl: 'https://example.com/cb',
+      pieceToken: 'test-api-key-value',
+      createdAt: new Date().toISOString(),
+    };
+    const kv = new MemoryKv({
+      'sub:test-native-webhook:sub-native-2': JSON.stringify(sub),
+    }) as unknown as KVNamespace;
+    const env = createEnv(kv);
+
+    const response = await worker.fetch(
+      new Request('https://freepieces.example.workers.dev/webhook/test-native-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'test.event', data: { foo: 'bar' } }),
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    // Worker accepts the webhook and dispatches asynchronously — 200 expected
+    expect(response.status).toBe(200);
   });
 });

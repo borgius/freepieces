@@ -127,11 +127,11 @@ export function createFreepiecesWorker(): FreepiecesWorker {
             return;
           }
           const stored = getPiece(pieceName);
-          if (!stored || stored.kind !== 'ap') {
+          if (!stored) {
             msg.ack();
             return;
           }
-          await dispatchWebhook(pieceName, stored.piece, payload, env);
+          await dispatchWebhook(pieceName, payload, env);
           msg.ack();
         }),
       );

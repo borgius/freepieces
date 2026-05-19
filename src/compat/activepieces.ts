@@ -38,6 +38,7 @@
  */
 
 import { createPiece as _createPiece } from '../framework/piece';
+import { createTrigger as _createTrigger } from '../framework/piece';
 import type {
   PieceDefinition,
   PieceAction,
@@ -47,9 +48,30 @@ import type {
 } from '../framework/types';
 
 // ---------------------------------------------------------------------------
-// Re-export native builder
+// Re-export native builders
 // ---------------------------------------------------------------------------
 export { _createPiece as createPiece };
+export { _createTrigger as createTrigger };
+
+// ---------------------------------------------------------------------------
+// TriggerStrategy — Activepieces-compatible trigger strategy constants
+// ---------------------------------------------------------------------------
+/**
+ * Trigger strategy constants.  Use these when authoring triggers with
+ * `createTrigger()` in the freepieces compat layer.
+ *
+ * @example
+ *   createTrigger({
+ *     type: TriggerStrategy.WEBHOOK,
+ *     onEnable: async (ctx) => { await registerWebhook(ctx.webhookUrl!); },
+ *     ...
+ *   })
+ */
+export const TriggerStrategy = {
+  POLLING: 'POLLING',
+  WEBHOOK: 'WEBHOOK',
+  APP_WEBHOOK: 'APP_WEBHOOK',
+} as const;
 
 // ---------------------------------------------------------------------------
 // createAction — wraps an Activepieces-style action descriptor

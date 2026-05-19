@@ -4,7 +4,7 @@
  */
 
 import { Hono } from 'hono';
-import { getPiece, getTrigger } from '../framework/registry';
+import { getPiece, getTrigger, isTriggerWebhookCapable } from '../framework/registry';
 import { runtimeAuth } from '../lib/runtime-auth-middleware';
 import {
   dispatchWebhook,
@@ -15,23 +15,54 @@ import {
   SUB_KEY,
 } from '../lib/webhook';
 import type { WebhookSubscription } from '../lib/webhook';
-import type { Env } from '../framework/types';
+import type { Env, PieceTrigger, ApTrigger } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
 import { getEnvStr, requireKVBinding } from '../lib/env';
+import { buildNativeTriggerContext, buildApTriggerContext } from '../lib/ap-context';
+import { resolveNativeRuntimeAuth, resolveApRuntimeAuth } from '../lib/auth-resolve';
 
 const webhookApi = new Hono<{
   Bindings: Env;
   Variables: { credentials: RuntimeRequestCredentials };
 }>();
 
+// ---------------------------------------------------------------------------
+// Lifecycle context builder
+//
+// Builds the right trigger context shape for onEnable/onDisable calls.
+// Native pieces get PieceTriggerContext; AP pieces get an AP-shaped context.
+// ---------------------------------------------------------------------------
+async function buildLifecycleContext(
+  pieceName: string,
+  triggerName: string,
+  stored: ReturnType<typeof getPiece>,
+  userId: string | undefined,
+  pieceToken: string | undefined,
+  pieceAuthProps: Record<string, string> | undefined,
+  propsValue: Record<string, unknown>,
+  env: Env,
+): Promise<unknown> {
+  if (!stored) return {};
+
+  if (stored.kind === 'native') {
+    let auth = await resolveNativeRuntimeAuth(pieceName, stored.def.auth, env, userId, pieceToken);
+    if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
+    return buildNativeTriggerContext(pieceName, triggerName, auth, propsValue, userId, env);
+  }
+
+  // AP piece
+  let auth = await resolveApRuntimeAuth(pieceName, stored.piece, env, userId, pieceToken);
+  if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
+  return buildApTriggerContext(pieceName, stored.piece, auth, propsValue, {}, env, userId);
+}
+
 // ── Inbound webhook (Slack Events API and equivalents) ──────────────────
 webhookApi.post('/webhook/:piece', async (c) => {
   const pieceName = c.req.param('piece');
   const stored = getPiece(pieceName);
-  if (!stored || stored.kind !== 'ap') {
-    return c.json({ error: 'Piece not found or not an AP piece' }, 404);
+  if (!stored) {
+    return c.json({ error: 'Piece not found' }, 404);
   }
-  const { piece } = stored;
 
   // Read raw body text before parsing (needed for HMAC verification)
   const rawBody = await c.req.text();
@@ -62,7 +93,7 @@ webhookApi.post('/webhook/:piece', async (c) => {
 
   // Fan out asynchronously so we can return 200 within Slack's 3-second window
   c.executionCtx.waitUntil(
-    dispatchWebhook(pieceName, piece, webhookBody, c.env).catch((err: unknown) =>
+    dispatchWebhook(pieceName, webhookBody, c.env).catch((err: unknown) =>
       console.error('[freepieces] dispatchWebhook error:', err),
     ),
   );
@@ -78,11 +109,15 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
   const triggerName = c.req.param('trigger');
 
   const stored = getPiece(pieceName);
-  if (!stored || stored.kind !== 'ap') {
-    return c.json({ error: 'Piece not found or not an AP piece' }, 404);
+  if (!stored) {
+    return c.json({ error: 'Piece not found' }, 404);
   }
-  if (!getTrigger(pieceName, triggerName)) {
+  const triggerDef = getTrigger(pieceName, triggerName);
+  if (!triggerDef) {
     return c.json({ error: 'Trigger not found' }, 404);
+  }
+  if (!isTriggerWebhookCapable(pieceName, triggerName)) {
+    return c.json({ error: 'Trigger does not support webhook subscriptions (strategy is not WEBHOOK or APP_WEBHOOK)' }, 400);
   }
 
   const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
@@ -125,6 +160,7 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
   }
 
   const subId = crypto.randomUUID();
+  const webhookUrl = `${getEnvStr(c.env, 'PUBLIC_URL')}/webhook/${pieceName}`;
   const sub: WebhookSubscription = {
     id: subId,
     trigger: triggerName,
@@ -137,7 +173,18 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
   };
   await requireKVBinding(c.env, 'TOKEN_STORE').put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
 
-  const webhookUrl = `${getEnvStr(c.env, 'PUBLIC_URL')}/webhook/${pieceName}`;
+  // Invoke onEnable lifecycle hook (webhook registration with upstream provider)
+  if (triggerDef.onEnable) {
+    try {
+      const enableCtx = await buildLifecycleContext(
+        pieceName, triggerName, stored, userId, pieceToken, pieceAuthProps, propsValue, c.env,
+      );
+      await (triggerDef.onEnable as (ctx: unknown) => Promise<void>)(enableCtx);
+    } catch (err) {
+      console.error(`[freepieces] onEnable for ${pieceName}/${triggerName} failed:`, err);
+    }
+  }
+
   return c.json({ ok: true, id: subId, webhookUrl }, 201);
 });
 
@@ -173,6 +220,23 @@ webhookApi.delete('/subscriptions/:piece/:trigger/:id', async (c) => {
   }
 
   await requireKVBinding(c.env, 'TOKEN_STORE').delete(SUB_KEY(pieceName, subDelId));
+
+  // Invoke onDisable lifecycle hook (webhook unregistration from upstream provider)
+  const triggerDef = getTrigger(pieceName, existingSub.trigger);
+  if (triggerDef?.onDisable) {
+    const stored = getPiece(pieceName);
+    const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
+    try {
+      const disableCtx = await buildLifecycleContext(
+        pieceName, existingSub.trigger, stored, userId, pieceToken, pieceAuthProps,
+        existingSub.propsValue, c.env,
+      );
+      await (triggerDef.onDisable as (ctx: unknown) => Promise<void>)(disableCtx);
+    } catch (err) {
+      console.error(`[freepieces] onDisable for ${pieceName}/${existingSub.trigger} failed:`, err);
+    }
+  }
+
   return c.json({ ok: true, id: subDelId });
 });
 

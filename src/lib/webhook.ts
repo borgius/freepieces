@@ -2,11 +2,11 @@
  * Webhook subscription storage, dispatch, and signature verification.
  */
 
-import { getTrigger } from '../framework/registry';
+import { getPiece, getTrigger } from '../framework/registry';
 import { timingSafeEqual } from './admin-session';
-import { resolveApRuntimeAuth } from './auth-resolve';
-import { buildApTriggerContext } from './ap-context';
-import type { Env, ApPiece } from '../framework/types';
+import { resolveApRuntimeAuth, resolveNativeRuntimeAuth } from './auth-resolve';
+import { buildApTriggerContext, buildNativeTriggerContext } from './ap-context';
+import type { Env } from '../framework/types';
 import { requireKVBinding } from './env';
 
 // ---------------------------------------------------------------------------
@@ -123,29 +123,36 @@ export function resolveQueueBinding(env: Env, queueName: string): Queue | undefi
 
 /**
  * Fan-out an inbound webhook payload to all active subscriptions for a piece.
+ * Works for both AP pieces and native pieces with WEBHOOK/APP_WEBHOOK triggers.
  * For each subscription, runs the trigger's run() filter and delivers matched
  * events to the subscription's callbackUrl or Cloudflare Queue.  Best-effort:
  * individual delivery failures are logged but do not affect other subscriptions.
  */
 export async function dispatchWebhook(
   pieceName: string,
-  piece: ApPiece,
   payload: unknown,
   env: Env,
 ): Promise<void> {
+  const stored = getPiece(pieceName);
+  if (!stored) return;
+  // Capture after null-check so nested closures see the narrowed StoredPiece type.
+  const storedEntry = stored;
+
   const subs = await listSubscriptions(requireKVBinding(env, 'TOKEN_STORE'), pieceName);
 
   // Cache auth resolution per (userId, pieceToken) pair so 100 subs from the
   // same user don't each trigger a KV read + AES-GCM decrypt + refresh check.
   const authCache = new Map<string, Promise<Record<string, string> | undefined>>();
-  function authFor(userId: string | undefined, pieceToken: string | undefined): Promise<Record<string, string> | undefined> {
+  const authFor = (userId: string | undefined, pieceToken: string | undefined): Promise<Record<string, string> | undefined> => {
     const key = `${userId ?? ''}|${pieceToken ?? ''}`;
     const cached = authCache.get(key);
     if (cached) return cached;
-    const pending = resolveApRuntimeAuth(pieceName, piece, env, userId, pieceToken);
+    const pending = storedEntry.kind === 'ap'
+      ? resolveApRuntimeAuth(pieceName, storedEntry.piece, env, userId, pieceToken)
+      : resolveNativeRuntimeAuth(pieceName, storedEntry.def.auth, env, userId, pieceToken);
     authCache.set(key, pending);
     return pending;
-  }
+  };
 
   await Promise.allSettled(
     subs.map(async (sub) => {
@@ -160,7 +167,14 @@ export async function dispatchWebhook(
 
       let events: unknown[];
       try {
-        const trigCtx = buildApTriggerContext(pieceName, piece, auth, sub.propsValue, payload, env);
+        let trigCtx: unknown;
+        if (storedEntry.kind === 'ap') {
+          trigCtx = buildApTriggerContext(pieceName, storedEntry.piece, auth, sub.propsValue, payload, env, sub.userId);
+        } else {
+          trigCtx = buildNativeTriggerContext(pieceName, sub.trigger, auth, sub.propsValue, sub.userId, env);
+          // Attach the inbound payload as context for native WEBHOOK/APP_WEBHOOK runs
+          (trigCtx as Record<string, unknown>)['payload'] = payload;
+        }
         events = await (triggerDef as { run(ctx: unknown): Promise<unknown[]> }).run(trigCtx);
       } catch {
         return; // trigger filter threw — skip

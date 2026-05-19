@@ -42,8 +42,9 @@ export async function verifyCfAccessJwt(
     return null
   }
 
-  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
-  if (!aud.includes(audience)) return null
+  const jwtAud = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
+  const expectedAuds = audience.split(',').map((a) => a.trim()).filter(Boolean)
+  if (!expectedAuds.some((a) => jwtAud.includes(a))) return null
 
   if (typeof payload.exp !== 'number' || payload.exp < Date.now() / 1000) return null
 

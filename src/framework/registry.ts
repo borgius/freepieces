@@ -351,6 +351,16 @@ export function getTrigger(pieceName: string, triggerName: string): ApTrigger | 
   return triggerIndex.get(pieceName)?.get(triggerName);
 }
 
+/**
+ * Check whether a trigger is webhook-capable (strategy is WEBHOOK or APP_WEBHOOK).
+ * Use this to gate subscription eligibility on trigger capability rather than piece kind.
+ */
+export function isTriggerWebhookCapable(pieceName: string, triggerName: string): boolean {
+  const trigger = getTrigger(pieceName, triggerName);
+  if (!trigger) return false;
+  return trigger.type === 'WEBHOOK' || trigger.type === 'APP_WEBHOOK';
+}
+
 /** Reset all registry state. Exported for tests. */
 export function __resetRegistryForTests(): void {
   pieces.clear();

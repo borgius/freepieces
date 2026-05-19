@@ -7,3 +7,4 @@ dist/
 .dev.vars
 # Generated from wrangler.toml.tmpl + .env — never commit real IDs/URLs
 wrangler.toml
+.hypergrep/

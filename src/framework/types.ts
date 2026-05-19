@@ -250,11 +250,31 @@ export interface PieceAction {
 }
 
 // ---------------------------------------------------------------------------
+// Trigger strategy and store (native + AP unified)
+// ---------------------------------------------------------------------------
+
+/** Trigger execution strategy — determines subscription eligibility and lifecycle. */
+export type TriggerStrategy = 'POLLING' | 'WEBHOOK' | 'APP_WEBHOOK';
+
+/**
+ * Persistent KV-backed state store for trigger instances.
+ * Provided in `PieceTriggerContext.store` for both native and AP trigger contexts.
+ */
+export interface TriggerStore {
+  /** Retrieve a previously persisted value (returns null when not set). */
+  get(key: string): Promise<unknown>;
+  /** Persist a value under the given key. */
+  put(key: string, value: unknown): Promise<void>;
+  /** Remove a persisted value. */
+  delete(key: string): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // Trigger context (native pieces)
 // ---------------------------------------------------------------------------
 
 /**
- * Context passed to each `PieceTrigger.run()` call.
+ * Context passed to each `PieceTrigger.run()`, `onEnable()`, and `onDisable()` call.
  *
  * `lastPollMs` — Unix epoch milliseconds of the last successful poll.
  *   Callers should persist this across runs (e.g. in KV) and pass it back
@@ -277,19 +297,42 @@ export interface PieceTriggerContext {
    * Force-refresh the OAuth2 access token. See {@link PieceActionContext.refreshAuth}.
    */
   refreshAuth?: () => Promise<Record<string, string> | undefined>;
+  /**
+   * KV-backed persistent state store scoped to this trigger instance.
+   * Available for both POLLING state cursors and WEBHOOK lifecycle data.
+   */
+  store?: TriggerStore;
+  /**
+   * The inbound webhook URL for this subscription.
+   * Populated by the runtime for WEBHOOK and APP_WEBHOOK triggers so `onEnable`
+   * can register it with the upstream provider.
+   */
+  webhookUrl?: string;
 }
 
 export interface PieceTrigger {
   name: string;
   displayName: string;
   description?: string;
-  /** Trigger strategy tag, e.g. 'POLLING'. Used for display only in native pieces. */
-  type: 'POLLING';
+  /** Trigger strategy — determines subscription eligibility and lifecycle. */
+  type: TriggerStrategy;
   /** Named input parameters (filter props). */
   props?: Record<string, PropDefinition>;
   /**
-   * Execute the trigger: list new events since `ctx.lastPollMs`.
-   * Returns an array of event objects (empty = nothing new).
+   * Called once when a subscription is created.
+   * Webhook-capable triggers use this to register the `ctx.webhookUrl` with
+   * the upstream provider so inbound events are routed here.
+   */
+  onEnable?(ctx: PieceTriggerContext): Promise<void>;
+  /**
+   * Called once when a subscription is deleted.
+   * Webhook-capable triggers use this to unregister from the upstream provider.
+   */
+  onDisable?(ctx: PieceTriggerContext): Promise<void>;
+  /**
+   * Execute the trigger: filter an inbound payload (WEBHOOK/APP_WEBHOOK) or
+   * list new events since `ctx.lastPollMs` (POLLING).
+   * Returns an array of event objects (empty = nothing new / no match).
    */
   run(ctx: PieceTriggerContext): Promise<unknown[]>;
 }
