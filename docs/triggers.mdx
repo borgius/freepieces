@@ -470,6 +470,44 @@ DELETE /subscriptions/:piece/:trigger/:id
 
 The identity used to delete the subscription must match the identity that created it.
 
+## Admin view: Settings → Triggers
+
+The admin panel includes a global **Settings → Triggers** section that shows all active trigger subscriptions grouped by their downstream delivery endpoint.
+
+### Accessing it
+
+Open the admin panel and go to **Settings → Triggers**. You will see every active subscription across all pieces, grouped by `callbackUrl` or `queueName`.
+
+### What each group shows
+
+Each delivery endpoint appears as a collapsible row. Expand a row to see:
+
+- **piece name and display name** — which piece the trigger belongs to
+- **trigger name and type** — `APP_WEBHOOK`, `WEBHOOK`, or `POLLING`
+- **provider webhook URL** — the upstream URL to give the provider (e.g. Slack's Event Subscriptions Request URL)
+- **owner summary** — a redacted description of the identity that created the subscription (no raw tokens are shown)
+- **subscription ID** — the stable identifier for that member
+- **created date** — when the subscription was registered
+
+### Grouping logic
+
+Groups are keyed by downstream delivery target only:
+
+- `callbackUrl` groups collect all subscriptions that deliver to the same HTTPS endpoint
+- `queueName` groups collect all subscriptions that deliver to the same Cloudflare Queue
+
+Provider webhook URLs are shown as member metadata inside each group, not as the primary grouping dimension.
+
+### Admin API endpoint
+
+The grouped data is served from:
+
+```text
+GET /admin/api/triggers/groups
+```
+
+This route is admin-session protected. It never returns raw `pieceToken` or `pieceAuthProps` values.
+
 ## Common mistakes
 
 ### Using `/trigger/...` when you wanted a persistent subscription

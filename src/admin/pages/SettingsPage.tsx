@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { Box, Flex, Text, VStack } from '@chakra-ui/react';
-import { KeyRound } from 'lucide-react';
+import { KeyRound, Webhook } from 'lucide-react';
 import { SecretsPanel } from '../components/SecretsPanel';
+import { TriggersPanel } from '../components/TriggersPanel';
 
-type Section = 'secrets';
+type Section = 'secrets' | 'triggers';
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'secrets', label: 'Secrets', icon: <KeyRound size={14} /> },
+  { id: 'triggers', label: 'Triggers', icon: <Webhook size={14} /> },
 ];
 
 export function SettingsPage() {
@@ -55,9 +57,10 @@ export function SettingsPage() {
         </VStack>
       </Box>
 
-      {/* Content */}
-      <Box flex={1} p={8} maxW="3xl">
+      {/* Content — widened to 5xl to accommodate grouped endpoint rows */}
+      <Box flex={1} p={8} maxW="5xl">
         {activeSection === 'secrets' && <SecretsPanel />}
+        {activeSection === 'triggers' && <TriggersPanel />}
       </Box>
     </Flex>
   );

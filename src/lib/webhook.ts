@@ -45,19 +45,31 @@ export interface WebhookSubscription {
 export const SUB_KEY = (piece: string, id: string): string => `sub:${piece}:${id}`;
 /** KV list prefix for all subscriptions of a piece. */
 export const SUB_PREFIX = (piece: string): string => `sub:${piece}:`;
+/** Global KV list prefix for all subscription records across all pieces. */
+export const ALL_SUBS_PREFIX = 'sub:';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 export function sameSubscriptionOwner(
-  sub: Pick<WebhookSubscription, 'userId' | 'pieceToken'>,
-  owner: { userId?: string; pieceToken?: string },
+  sub: Pick<WebhookSubscription, 'userId' | 'pieceToken' | 'pieceAuthProps'>,
+  owner: { userId?: string; pieceToken?: string; pieceAuthProps?: Record<string, string> },
 ): boolean {
   const legacy = (sub as WebhookSubscription).bearerToken;
   const subUserId = sub.userId ?? legacy;
   const subPieceToken = sub.pieceToken ?? legacy;
-  return subUserId === owner.userId && subPieceToken === owner.pieceToken;
+  if (subUserId !== owner.userId || subPieceToken !== owner.pieceToken) return false;
+  // For CUSTOM_AUTH identities, also match on pieceAuthProps so two identities
+  // sharing the same userId/pieceToken but different credentials don't collapse.
+  const subProps = sub.pieceAuthProps;
+  const ownerProps = owner.pieceAuthProps;
+  if (!subProps && !ownerProps) return true;
+  if (!subProps || !ownerProps) return false;
+  const subKeys = Object.keys(subProps).sort();
+  const ownerKeys = Object.keys(ownerProps).sort();
+  if (subKeys.length !== ownerKeys.length) return false;
+  return subKeys.every((k, i) => k === ownerKeys[i] && subProps[k] === ownerProps[k]);
 }
 
 /**
@@ -110,6 +122,45 @@ export async function listSubscriptions(kv: KVNamespace, piece: string): Promise
     try { subs.push(JSON.parse(raw) as WebhookSubscription); } catch { /* skip corrupt */ }
   }
   return subs;
+}
+
+/** A subscription record annotated with the piece name derived from its KV key. */
+export interface AnnotatedSubscription {
+  pieceName: string;
+  sub: WebhookSubscription;
+}
+
+/**
+ * Enumerate every subscription record across all pieces.
+ * Derives `pieceName` from the KV key (`sub:{piece}:{id}`).
+ * Pages through all KV keys and fetches records in parallel.
+ */
+export async function listAllSubscriptions(kv: KVNamespace): Promise<AnnotatedSubscription[]> {
+  const prefix = ALL_SUBS_PREFIX;
+  const names: string[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const page = await kv.list(cursor ? { prefix, cursor } : { prefix });
+    for (const key of page.keys) names.push(key.name);
+    if (page.list_complete || !page.cursor) break;
+    cursor = page.cursor;
+  }
+
+  const raws = await Promise.all(names.map((name) => kv.get(name)));
+  const result: AnnotatedSubscription[] = [];
+  for (let i = 0; i < names.length; i++) {
+    const raw = raws[i];
+    if (!raw) continue;
+    try {
+      const sub = JSON.parse(raw) as WebhookSubscription;
+      // Key format: sub:{piece}:{id}
+      const parts = names[i].split(':');
+      const pieceName = parts[1] ?? '';
+      if (pieceName) result.push({ pieceName, sub });
+    } catch { /* skip corrupt */ }
+  }
+  return result;
 }
 
 /**

@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
-import { listPieces, getPiece } from '../framework/registry';
+import { listPieces, getPiece, getTrigger, isTriggerWebhookCapable } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
 import { makeIssuerFetch } from '../lib/auth-issuer';
@@ -24,6 +24,8 @@ import {
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
 import { requireEnvStr, requireKVBinding, getEnvBool } from '../lib/env';
+import { listAllSubscriptions, SUB_KEY, resolveQueueBinding } from '../lib/webhook';
+import type { WebhookSubscription } from '../lib/webhook';
 
 const authClientCache = new WeakMap<object, ReturnType<typeof createAuthClient>>();
 
@@ -354,6 +356,191 @@ adminApi.delete('/pieces/:name', async (c) => {
   if (!getPiece(name)) return c.json({ error: 'Piece not found' }, 404);
   await requireKVBinding(c.env, 'TOKEN_STORE').put(PIECE_FLAG(name), 'false');
   return c.json({ ok: true, name, enabled: false });
+});
+
+// POST /admin/api/subscriptions/:piece/:trigger — admin-privileged subscription creation
+adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
+  const pieceName = c.req.param('piece');
+  const triggerName = c.req.param('trigger');
+
+  if (!getPiece(pieceName)) return c.json({ error: 'Piece not found' }, 404);
+  if (!getTrigger(pieceName, triggerName)) return c.json({ error: 'Trigger not found' }, 404);
+  if (!isTriggerWebhookCapable(pieceName, triggerName)) {
+    return c.json({ error: 'Trigger does not support webhook subscriptions' }, 400);
+  }
+
+  let body: { callbackUrl?: string; queueName?: string; pieceToken?: string; userId?: string; propsValue?: Record<string, unknown> };
+  try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
+
+  const { callbackUrl, queueName, pieceToken, userId, propsValue = {} } = body;
+
+  if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
+  if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
+
+  if (callbackUrl) {
+    try {
+      const u = new URL(callbackUrl);
+      if (u.protocol !== 'https:') throw new Error();
+    } catch {
+      return c.json({ error: 'callbackUrl must be a valid HTTPS URL' }, 400);
+    }
+  }
+
+  if (queueName && !resolveQueueBinding(c.env, queueName)) {
+    return c.json({ error: `Queue binding not found for "${queueName}"` }, 400);
+  }
+
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const subId = crypto.randomUUID();
+  const sub: WebhookSubscription = {
+    id: subId,
+    trigger: triggerName,
+    propsValue,
+    ...(callbackUrl ? { callbackUrl } : { queueName }),
+    ...(userId ? { userId } : {}),
+    ...(pieceToken ? { pieceToken } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  await kv.put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
+  return c.json({ ok: true, id: subId }, 201);
+});
+
+// PATCH /admin/api/subscriptions/:piece/:id — update endpoint for one subscription
+adminApi.patch('/subscriptions/:piece/:id', async (c) => {
+  const pieceName = c.req.param('piece');
+  const subId = c.req.param('id');
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+
+  const raw = await kv.get(SUB_KEY(pieceName, subId));
+  if (!raw) return c.json({ error: 'Subscription not found' }, 404);
+
+  let body: { callbackUrl?: string; queueName?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
+
+  const { callbackUrl, queueName } = body;
+  if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
+  if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
+
+  if (callbackUrl) {
+    try {
+      const u = new URL(callbackUrl);
+      if (u.protocol !== 'https:') throw new Error();
+    } catch {
+      return c.json({ error: 'callbackUrl must be a valid HTTPS URL' }, 400);
+    }
+  }
+
+  if (queueName && !resolveQueueBinding(c.env, queueName)) {
+    return c.json({ error: `Queue binding not found for "${queueName}"` }, 400);
+  }
+
+  const existing = JSON.parse(raw) as WebhookSubscription;
+  const { callbackUrl: _cb, queueName: _qn, ...rest } = existing;
+  const updated: WebhookSubscription = {
+    ...rest,
+    ...(callbackUrl ? { callbackUrl } : { queueName }),
+  };
+  await kv.put(SUB_KEY(pieceName, subId), JSON.stringify(updated));
+  return c.json({ ok: true });
+});
+
+// DELETE /admin/api/subscriptions/:piece/:id — admin-privileged deletion
+adminApi.delete('/subscriptions/:piece/:id', async (c) => {
+  const pieceName = c.req.param('piece');
+  const subId = c.req.param('id');
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+
+  const raw = await kv.get(SUB_KEY(pieceName, subId));
+  if (!raw) return c.json({ error: 'Subscription not found' }, 404);
+
+  await kv.delete(SUB_KEY(pieceName, subId));
+  return c.json({ ok: true });
+});
+
+// GET /admin/api/triggers/groups — global grouped trigger delivery read model
+adminApi.get('/triggers/groups', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const publicUrl = (c.env.FREEPIECES_PUBLIC_URL ?? c.env.FP_PUBLIC_URL ?? c.env.PUBLIC_URL ?? '').replace(/\/$/, '');
+
+  const all = await listAllSubscriptions(kv);
+  const pieceSummaries = listPieces();
+
+  // Group by delivery target: callbackUrl or queueName
+  const groupMap = new Map<string, {
+    endpointType: 'callbackUrl' | 'queueName';
+    endpointValue: string;
+    members: Array<{
+      subscriptionId: string;
+      pieceName: string;
+      pieceDisplayName: string;
+      triggerName: string;
+      triggerDisplayName: string;
+      triggerType: string;
+      providerWebhookUrl: string;
+      createdAt: string;
+      owner: { kind: string; label: string; ownerKey: string };
+      deliveryTarget: { type: string; value: string };
+    }>;
+  }>();
+
+  for (const { pieceName, sub } of all) {
+    const endpointType = sub.queueName ? 'queueName' : 'callbackUrl';
+    const endpointValue = sub.queueName ?? sub.callbackUrl ?? '';
+    if (!endpointValue) continue;
+
+    const endpointKey = `${endpointType}:${endpointValue}`;
+
+    if (!groupMap.has(endpointKey)) {
+      groupMap.set(endpointKey, { endpointType, endpointValue, members: [] });
+    }
+
+    // Derive display metadata from registry
+    const pieceSummary = pieceSummaries.find((p) => p.name === pieceName);
+    const triggerDef = getTrigger(pieceName, sub.trigger);
+
+    const pieceDisplayName = pieceSummary?.displayName ?? pieceName;
+    const triggerDisplayName = triggerDef?.displayName ?? sub.trigger;
+    const triggerType = triggerDef?.type ?? 'WEBHOOK';
+    const providerWebhookUrl = `${publicUrl}/webhook/${encodeURIComponent(pieceName)}`;
+
+    // Build redacted owner summary — never return raw pieceToken or pieceAuthProps
+    let owner: { kind: string; label: string; ownerKey: string };
+    if (sub.userId) {
+      owner = { kind: 'stored-user', label: sub.userId, ownerKey: `oauth:${sub.userId}` };
+    } else if (sub.pieceToken) {
+      // Redact: expose only that a direct token is used, not the token itself
+      owner = { kind: 'direct-token', label: 'API key / direct token', ownerKey: `token:${sub.id}` };
+    } else if (sub.pieceAuthProps) {
+      owner = { kind: 'custom-auth', label: 'Custom auth props', ownerKey: `custom:${sub.id}` };
+    } else if ((sub as { bearerToken?: string }).bearerToken) {
+      owner = { kind: 'legacy-bearer', label: 'Legacy bearer token', ownerKey: `legacy:${sub.id}` };
+    } else {
+      owner = { kind: 'unknown', label: 'Unknown', ownerKey: `unknown:${sub.id}` };
+    }
+
+    groupMap.get(endpointKey)!.members.push({
+      subscriptionId: sub.id,
+      pieceName,
+      pieceDisplayName,
+      triggerName: sub.trigger,
+      triggerDisplayName,
+      triggerType,
+      providerWebhookUrl,
+      createdAt: sub.createdAt,
+      owner,
+      deliveryTarget: { type: endpointType, value: endpointValue },
+    });
+  }
+
+  const groups = Array.from(groupMap.entries()).map(([endpointKey, group]) => ({
+    endpointKey,
+    endpointType: group.endpointType,
+    endpointValue: group.endpointValue,
+    memberCount: group.members.length,
+    members: group.members,
+  }));
+
+  return c.json({ groups });
 });
 
 // Catch-all for unmatched admin API paths

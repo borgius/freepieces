@@ -148,3 +148,75 @@ export async function deletePieceUser(name: string, userId: string): Promise<voi
 export async function getSecrets(): Promise<SecretsResponse> {
   return apiFetch('/admin/api/secrets');
 }
+
+// ---------------------------------------------------------------------------
+// Trigger groups
+// ---------------------------------------------------------------------------
+
+export interface TriggerOwner {
+  kind: string;
+  label: string;
+  ownerKey: string;
+}
+
+export interface TriggerDeliveryTarget {
+  type: string;
+  value: string;
+}
+
+export interface TriggerMember {
+  subscriptionId: string;
+  pieceName: string;
+  pieceDisplayName: string;
+  triggerName: string;
+  triggerDisplayName: string;
+  triggerType: string;
+  providerWebhookUrl: string;
+  createdAt: string;
+  owner: TriggerOwner;
+  deliveryTarget: TriggerDeliveryTarget;
+}
+
+export interface TriggerGroup {
+  endpointKey: string;
+  endpointType: 'callbackUrl' | 'queueName';
+  endpointValue: string;
+  memberCount: number;
+  members: TriggerMember[];
+}
+
+export interface TriggerGroupsResponse {
+  groups: TriggerGroup[];
+}
+
+export async function getTriggerGroups(): Promise<TriggerGroupsResponse> {
+  return apiFetch('/admin/api/triggers/groups');
+}
+
+export async function createAdminSubscription(
+  piece: string,
+  trigger: string,
+  body: { callbackUrl?: string; queueName?: string; pieceToken?: string; userId?: string; propsValue?: Record<string, unknown> },
+): Promise<{ ok: boolean; id: string }> {
+  return apiFetch(`/admin/api/subscriptions/${encodeURIComponent(piece)}/${encodeURIComponent(trigger)}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateAdminSubscription(
+  piece: string,
+  id: string,
+  body: { callbackUrl?: string } | { queueName?: string },
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/admin/api/subscriptions/${encodeURIComponent(piece)}/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteAdminSubscription(piece: string, id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/admin/api/subscriptions/${encodeURIComponent(piece)}/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}

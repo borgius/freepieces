@@ -204,6 +204,214 @@ test.describe('Settings page', () => {
     await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
     await expect(page.getByText(/set|missing/i).first()).toBeVisible({ timeout: 8_000 });
   });
+
+  test('shows the Triggers sidebar item', async ({ page }) => {
+    await expect(page.getByRole('button', { name: 'Triggers' })).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Settings → Triggers panel
+// ---------------------------------------------------------------------------
+
+test.describe('Settings → Triggers panel', () => {
+  test.beforeEach(async ({ page }) => {
+    await loginMocked(page);
+    await page.getByRole('button', { name: 'Settings' }).click();
+  });
+
+  test('shows Triggers heading when Triggers tab is selected', async ({ page }) => {
+    // Mock the groups endpoint before navigating
+    await page.route('**/admin/api/triggers/groups', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ groups: [] }),
+      }),
+    );
+    await page.getByRole('button', { name: 'Triggers' }).click();
+    await expect(page.getByRole('heading', { name: 'Triggers' })).toBeVisible({ timeout: 8_000 });
+  });
+
+  test('shows empty state when there are no subscriptions', async ({ page }) => {
+    await page.route('**/admin/api/triggers/groups', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ groups: [] }),
+      }),
+    );
+    await page.getByRole('button', { name: 'Triggers' }).click();
+    await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.getByText(/no active trigger subscriptions|no trigger subscriptions/i)).toBeVisible({ timeout: 8_000 });
+  });
+
+  test('shows grouped endpoint rows when subscriptions exist', async ({ page }) => {
+    await page.route('**/admin/api/triggers/groups', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          groups: [
+            {
+              endpointKey: 'callbackUrl:https://my-server.example.com/hook',
+              endpointType: 'callbackUrl',
+              endpointValue: 'https://my-server.example.com/hook',
+              memberCount: 2,
+              members: [
+                {
+                  subscriptionId: 'sub-1',
+                  pieceName: 'test-piece',
+                  pieceDisplayName: 'Test Piece',
+                  triggerName: 'new-event',
+                  triggerDisplayName: 'New Event',
+                  triggerType: 'WEBHOOK',
+                  providerWebhookUrl: 'https://worker.example.com/webhook/test-piece',
+                  createdAt: '2026-05-01T00:00:00.000Z',
+                  owner: { kind: 'direct-token', label: 'API key / direct token', ownerKey: 'token:sub-1' },
+                  deliveryTarget: { type: 'callbackUrl', value: 'https://my-server.example.com/hook' },
+                },
+                {
+                  subscriptionId: 'sub-2',
+                  pieceName: 'test-piece',
+                  pieceDisplayName: 'Test Piece',
+                  triggerName: 'new-event',
+                  triggerDisplayName: 'New Event',
+                  triggerType: 'WEBHOOK',
+                  providerWebhookUrl: 'https://worker.example.com/webhook/test-piece',
+                  createdAt: '2026-05-02T00:00:00.000Z',
+                  owner: { kind: 'stored-user', label: 'alice@example.com', ownerKey: 'oauth:alice@example.com' },
+                  deliveryTarget: { type: 'callbackUrl', value: 'https://my-server.example.com/hook' },
+                },
+              ],
+            },
+            {
+              endpointKey: 'queueName:events-queue',
+              endpointType: 'queueName',
+              endpointValue: 'events-queue',
+              memberCount: 1,
+              members: [
+                {
+                  subscriptionId: 'sub-3',
+                  pieceName: 'test-piece',
+                  pieceDisplayName: 'Test Piece',
+                  triggerName: 'new-event',
+                  triggerDisplayName: 'New Event',
+                  triggerType: 'WEBHOOK',
+                  providerWebhookUrl: 'https://worker.example.com/webhook/test-piece',
+                  createdAt: '2026-05-03T00:00:00.000Z',
+                  owner: { kind: 'stored-user', label: 'bob@example.com', ownerKey: 'oauth:bob@example.com' },
+                  deliveryTarget: { type: 'queueName', value: 'events-queue' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    await page.getByRole('button', { name: 'Triggers' }).click();
+    await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
+
+    // Should show the two endpoint groups
+    await expect(page.getByText('https://my-server.example.com/hook')).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText('events-queue')).toBeVisible({ timeout: 8_000 });
+
+    // Should show member counts
+    await expect(page.getByText(/2 triggers/i)).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/1 trigger/i)).toBeVisible({ timeout: 8_000 });
+
+    // Should show HTTPS callback and Cloudflare Queue type badges
+    await expect(page.getByText(/HTTPS callback/i).first()).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/Cloudflare Queue/i).first()).toBeVisible({ timeout: 8_000 });
+  });
+
+  test('expanding a group reveals member metadata', async ({ page }) => {
+    await page.route('**/admin/api/triggers/groups', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          groups: [
+            {
+              endpointKey: 'callbackUrl:https://expand-test.example.com/hook',
+              endpointType: 'callbackUrl',
+              endpointValue: 'https://expand-test.example.com/hook',
+              memberCount: 1,
+              members: [
+                {
+                  subscriptionId: 'sub-expand-1',
+                  pieceName: 'slack',
+                  pieceDisplayName: 'Slack',
+                  triggerName: 'new-message',
+                  triggerDisplayName: 'New Message',
+                  triggerType: 'APP_WEBHOOK',
+                  providerWebhookUrl: 'https://worker.example.com/webhook/slack',
+                  createdAt: '2026-05-10T12:00:00.000Z',
+                  owner: { kind: 'stored-user', label: 'charlie@example.com', ownerKey: 'oauth:charlie@example.com' },
+                  deliveryTarget: { type: 'callbackUrl', value: 'https://expand-test.example.com/hook' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    await page.getByRole('button', { name: 'Triggers' }).click();
+    await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
+
+    // Click the group row to expand it
+    await page.getByText('https://expand-test.example.com/hook').click();
+
+    // Member metadata should now be visible
+    await expect(page.getByText('Slack')).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText('New Message')).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText('charlie@example.com')).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText('https://worker.example.com/webhook/slack')).toBeVisible({ timeout: 8_000 });
+  });
+
+  test('Refresh button reloads trigger groups', async ({ page }) => {
+    let callCount = 0;
+    await page.route('**/admin/api/triggers/groups', (route) => {
+      callCount++;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ groups: [] }),
+      });
+    });
+
+    await page.getByRole('button', { name: 'Triggers' }).click();
+    await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
+
+    const countBefore = callCount;
+    await page.getByRole('button', { name: /refresh/i }).click();
+    await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
+    expect(callCount).toBeGreaterThan(countBefore);
+  });
+
+  test('shows summary line with endpoint and subscription counts', async ({ page }) => {
+    await page.route('**/admin/api/triggers/groups', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          groups: [
+            { endpointKey: 'callbackUrl:https://a.example.com/', endpointType: 'callbackUrl', endpointValue: 'https://a.example.com/', memberCount: 3, members: [] },
+            { endpointKey: 'queueName:my-q', endpointType: 'queueName', endpointValue: 'my-q', memberCount: 1, members: [] },
+          ],
+        }),
+      }),
+    );
+
+    await page.getByRole('button', { name: 'Triggers' }).click();
+    await expect(page.getByRole('progressbar')).toHaveCount(0, { timeout: 10_000 });
+
+    // Summary: 2 delivery endpoints, 4 subscriptions total
+    await expect(page.getByText(/2 delivery endpoint/i)).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/4 subscription/i)).toBeVisible({ timeout: 8_000 });
+  });
 });
 
 // ---------------------------------------------------------------------------
