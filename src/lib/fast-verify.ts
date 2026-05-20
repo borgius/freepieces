@@ -25,28 +25,30 @@ type JWKSData = { keys: Array<Record<string, unknown>> };
 
 let jwksSetPromise: Promise<ReturnType<typeof createLocalJWKSet>> | null = null;
 
-function getKV(env: Env): KVNamespace {
+function getKV(env: Env): KVNamespace | undefined {
   const e = env as unknown as Record<string, KVNamespace | undefined>;
-  const kv = e['FREEPIECES_AUTH_STORE'] ?? e['FP_AUTH_STORE'] ?? e['AUTH_STORE'];
-  if (!kv) throw new Error('No auth KV binding (FREEPIECES_AUTH_STORE/FP_AUTH_STORE/AUTH_STORE)');
-  return kv;
+  return e['FREEPIECES_AUTH_STORE'] ?? e['FP_AUTH_STORE'] ?? e['AUTH_STORE'];
 }
 
 async function loadJWKSet(env: Env, origin: string, ctx: ExecutionContext) {
   if (jwksSetPromise) return jwksSetPromise;
   jwksSetPromise = (async () => {
     const kv = getKV(env);
-    const cached = await kv.get<JWKSData>(JWKS_KV_KEY, 'json');
-    if (cached?.keys?.length) {
-      return createLocalJWKSet(cached as Parameters<typeof createLocalJWKSet>[0]);
+    if (kv) {
+      const cached = await kv.get<JWKSData>(JWKS_KV_KEY, 'json');
+      if (cached?.keys?.length) {
+        return createLocalJWKSet(cached as Parameters<typeof createLocalJWKSet>[0]);
+      }
     }
-    // Cold fallback: compute via the cached issuer app, then persist.
+    // Cold fallback (or no KV on Linux): compute via the cached issuer app.
     const issuerApp = getIssuerApp(env);
     const res = await issuerApp.fetch(new Request(`${origin}/.well-known/jwks.json`), env, ctx);
     const jwks = (await res.json()) as JWKSData;
-    ctx.waitUntil(
-      kv.put(JWKS_KV_KEY, JSON.stringify(jwks), { expirationTtl: JWKS_KV_TTL_SECONDS }),
-    );
+    if (kv) {
+      ctx.waitUntil(
+        kv.put(JWKS_KV_KEY, JSON.stringify(jwks), { expirationTtl: JWKS_KV_TTL_SECONDS }),
+      );
+    }
     return createLocalJWKSet(jwks as Parameters<typeof createLocalJWKSet>[0]);
   })().catch((err) => {
     jwksSetPromise = null;
