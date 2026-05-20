@@ -10,7 +10,7 @@ import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece, getTrigger, isTriggerWebhookCapable } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
-import { makeIssuerFetch } from '../lib/auth-issuer';
+import { makeIssuerFetch, warmupIssuer } from '../lib/auth-issuer';
 import { fastVerify } from '../lib/fast-verify';
 import { verifyCfAccessJwt } from '../lib/cf-access';
 import {
@@ -143,7 +143,15 @@ adminApi.use('*', async (c, next) => {
 
   const accessToken = getCookie(c, COOKIE_NAME);
   const refreshToken = getCookie(c, REFRESH_COOKIE);
-  if (!accessToken) return c.json({ error: 'Unauthorized' }, 401);
+  if (!accessToken) {
+    // Kick off the issuer crypto warmup in the background so the RSA
+    // encryption key is loaded by the time the user clicks a login button.
+    // The lazy() memoization in the OpenAuth issuer shares this in-flight
+    // Promise with the real /oa/authorize request, cutting the user-visible
+    // wait to whatever time remains after the warmup started.
+    c.executionCtx.waitUntil(warmupIssuer(c.env, new URL(c.req.url).origin));
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
 
   const origin = new URL(c.req.url).origin;
 

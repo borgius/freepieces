@@ -30,6 +30,38 @@ export function getIssuerApp(env: Env): ReturnType<typeof createAuthIssuer> {
   return issuerApp;
 }
 
+/**
+ * Pre-warm the OpenAuth issuer's lazy encryption key by making an in-process
+ * authorize request. The `lazy()` memoization inside the issuer means this
+ * Promise is shared with any concurrent real request — so even a mid-flight
+ * warmup reduces the user-visible wait on /oa/authorize. Call via
+ * ctx.waitUntil() to run in the background without blocking the HTTP response.
+ *
+ * Root cause: the first /oa/authorize call per isolate triggers
+ * allEncryption() → encryptionKeys() → importSPKI/importPKCS8 for an
+ * RSA-OAEP-512 key, which takes ~13 s on a cold Cloudflare Worker isolate.
+ * Firing this warmup as soon as the login page is shown gives the import time
+ * to finish (or partially finish) before the user clicks a login button.
+ */
+export async function warmupIssuer(env: Env, origin: string): Promise<void> {
+  try {
+    const issuerApp = getIssuerApp(env);
+    const redirectUri = `${origin}/admin/api/callback`;
+    // Drive /authorize in-process — triggers auth.set() → encrypt() →
+    // encryptionKey() → allEncryption() → RSA key import.  The response
+    // (a 302 redirect) is intentionally discarded.
+    await issuerApp.fetch(
+      new Request(
+        `${origin}/authorize?client_id=freepieces-worker` +
+          `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          `&response_type=code&provider=code`,
+      ),
+    );
+  } catch {
+    // Warmup is best-effort — swallow all errors
+  }
+}
+
 /** Convenience: return a fetch-compatible function that routes requests
  *  in-process through the cached issuer app. */
 export function makeIssuerFetch(env: Env): typeof fetch {
