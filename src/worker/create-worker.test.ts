@@ -195,6 +195,48 @@ describe('createFreepiecesWorker()', () => {
       ]);
     });
 
+    it('falls back to displayName as description when action has no description', async () => {
+      const { createFreepiecesWorker } = await import('./create-worker.js');
+      const { registerPiece } = await import('../framework/registry.js');
+      const env = createEnv();
+      env.FREEPIECES_RUN_API_KEY = 'fp_sk_mcp';
+
+      registerPiece({
+        name: 'no-desc-test',
+        displayName: 'No Desc Test',
+        version: '1.0.0',
+        auth: { type: 'apiKey' },
+        actions: [
+          {
+            name: 'do_thing',
+            displayName: 'Do Thing',
+            props: {},
+            run: async () => ({}),
+          },
+        ],
+        triggers: [],
+      });
+
+      const worker = createFreepiecesWorker();
+      const response = await worker.fetch(
+        new Request('https://freepieces.example.workers.dev/mcp/no-desc-test', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer fp_sk_mcp',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 'tools', method: 'tools/list' }),
+        }),
+        env,
+        createCtx(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = await response.json() as { result: { tools: Array<{ name: string; description: string }> } };
+      const tool = body.result.tools.find((t) => t.name === 'do_thing');
+      expect(tool?.description).toBe('Do Thing.');
+    });
+
     it('calls an MCP tool with the same split auth headers as /run', async () => {
       const { worker, env } = await createWorkerWithMcpPiece('fp_sk_mcp');
       const response = await worker.fetch(

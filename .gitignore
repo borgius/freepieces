@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.pnpm-store/
 .wrangler/
 *.local
 .env
@@ -8,3 +9,4 @@ dist/
 # Generated from wrangler.toml.tmpl + .env — never commit real IDs/URLs
 wrangler.toml
 .hypergrep/
+test-results/

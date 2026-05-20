@@ -1,0 +1,23 @@
+services:
+  freepieces:
+    image: node:22-alpine
+    working_dir: /app
+    # Install pnpm + deps on first start, then run the hot-reload dev server
+    command: >
+      sh -c "npm install -g pnpm &&
+             pnpm install &&
+             sh scripts/dev-linux.sh"
+    volumes:
+      # Mount source so edits on the host are reflected inside the container
+      - .:/app
+      # Isolate node_modules so the container gets Linux binaries, not macOS ones
+      - freepieces_dev_modules:/app/node_modules
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+
+volumes:
+  freepieces_dev_modules:

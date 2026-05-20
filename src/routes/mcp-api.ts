@@ -107,7 +107,7 @@ function nativeTools(piece: PieceDefinition): McpTool[] {
   return piece.actions.map((action) => ({
     name: action.name,
     title: action.displayName,
-    description: action.description,
+    description: action.description ?? `${action.displayName}.`,
     inputSchema: propsToInputSchema(action.props),
   }));
 }
@@ -116,7 +116,7 @@ function apTools(piece: ApPiece): McpTool[] {
   return Object.values(piece._actions).map((action) => ({
     name: action.name,
     title: action.displayName,
-    description: action.description,
+    description: action.description ?? `${action.displayName}.`,
     inputSchema: propsToInputSchema(extractApProps(action.props)),
   }));
 }
