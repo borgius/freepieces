@@ -7,6 +7,7 @@ Workspace instructions for `freepieces`.
 For any new feature, bug fix, or public behavior change, update every affected surface in the same change:
 
 - `src/worker.ts` and shared runtime helpers
+- Linux entrypoint and shims (`src/linux-server.ts`, `src/lib/linux-kv.ts`, `src/lib/linux-email.ts`) when auth, routes, or env vars change
 - SDK types/client/examples (`src/sdk/**`, `examples/sdk-example.ts`)
 - CLI scaffolding/config/help text (`src/cli/**`) when secrets, flags, or env vars change
 - Script/example entrypoints (`src/client/**`, `examples/**`) when runtime calling conventions change

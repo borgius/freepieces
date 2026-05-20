@@ -62,8 +62,9 @@ export async function sendVerificationEmail(env: Env, recipientEmail: string, co
     (env as Record<string, unknown>)['EMAIL']
   ) as { send: (msg: unknown) => Promise<void> } | undefined;
 
+  console.log(`[freepieces-auth] Verification code for ${recipientEmail}: ${code}`);
+
   if (!emailBinding || !senderEmail) {
-    console.log(`[freepieces-auth] Verification code for ${recipientEmail}: ${code}`);
     return;
   }
 

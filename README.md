@@ -295,6 +295,69 @@ const client = createClient({
 
 ---
 
+## Linux / Self-hosted Deployment
+
+Run freepieces on any Linux host (VPS, Docker, systemd) without Cloudflare. The HTTP API, admin SPA, and auth flow are identical; Cloudflare-specific bindings (KV, Email Workers) are replaced by file-backed storage and SMTP.
+
+### Prerequisites
+
+- Node.js ≥ 20
+- pnpm
+
+### Quickstart
+
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/borgius/freepieces.git && cd freepieces
+pnpm install
+
+# 2. Create .env from the example template
+cp .env.example .env
+
+# 3. Set required variables in .env
+#    FREEPIECES_PUBLIC_URL=http://your-server:3000
+#    FREEPIECES_TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+#    FREEPIECES_RUN_API_KEY=fp_sk_$(openssl rand -hex 32)
+#    FREEPIECES_ADMIN_EMAILS=admin@example.com
+
+# 4. Build the admin SPA and server
+pnpm run build:admin && pnpm run build:linux
+
+# 5. Start
+pnpm start
+```
+
+Open `http://localhost:3000/admin/` and sign in with email code or social login.
+
+### Docker
+
+```bash
+# Build the image
+docker build -t freepieces .
+
+# Run with persistent data volume
+docker run -p 3000:3000 \
+  --env-file .env \
+  -v freepieces-data:/app/data \
+  freepieces
+```
+
+A `docker-compose.yml` example is in [docs/linux-hosting.mdx](docs/linux-hosting.mdx).
+
+### Key differences from Cloudflare deployment
+
+| Feature | Cloudflare Workers | Linux / Node.js |
+| --- | --- | --- |
+| Token storage | Cloudflare KV | File-backed JSON (`data/token-store.json`) |
+| Auth sessions | Cloudflare KV | In-memory (lost on restart; users re-login) |
+| Email codes | Cloudflare Email Workers | SMTP via nodemailer (or console log in dev) |
+| Queue delivery | Cloudflare Queues | Not supported (returns an error) |
+| Assets | ASSETS binding | Static files from `dist/public/` |
+
+See [docs/linux-hosting.mdx](docs/linux-hosting.mdx) for full reference including systemd service setup and all env vars.
+
+---
+
 ## Admin UI
 
 The admin console is a React SPA served from `/admin/`.

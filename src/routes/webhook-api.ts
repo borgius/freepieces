@@ -92,11 +92,14 @@ webhookApi.post('/webhook/:piece', async (c) => {
   }
 
   // Fan out asynchronously so we can return 200 within Slack's 3-second window
-  c.executionCtx.waitUntil(
-    dispatchWebhook(pieceName, webhookBody, c.env).catch((err: unknown) =>
-      console.error('[freepieces] dispatchWebhook error:', err),
-    ),
+  const dispatch = dispatchWebhook(pieceName, webhookBody, c.env).catch((err: unknown) =>
+    console.error('[freepieces] dispatchWebhook error:', err),
   );
+  if (c.executionCtx?.waitUntil) {
+    c.executionCtx.waitUntil(dispatch);
+  } else {
+    setImmediate(() => { dispatch.catch(() => {}); });
+  }
   return c.text('OK', 200);
 });
 

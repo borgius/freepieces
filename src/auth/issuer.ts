@@ -16,6 +16,7 @@ import { PasswordUI } from '@openauthjs/openauth/ui/password';
 import { GoogleProvider } from '@openauthjs/openauth/provider/google';
 import { GithubProvider } from '@openauthjs/openauth/provider/github';
 import { CloudflareStorage } from '@openauthjs/openauth/storage/cloudflare';
+import type { StorageAdapter } from '@openauthjs/openauth/storage/storage';
 import { subjects } from './subjects';
 import type { Env } from '../framework/types';
 import { sendVerificationEmail } from './email';
@@ -59,9 +60,20 @@ function isAdmin(email: string, env: Env): boolean {
  *
  * Called per-request so we have access to the Worker's `env` bindings.
  * OpenAuth's issuer() returns a Hono app that we mount at /oa in the main worker.
+ *
+ * @param storage - Optional storage adapter. Defaults to CloudflareStorage (KV).
+ *                  Pass a MemoryStorage or file-backed adapter for Linux deployments.
+ * @param sendCode - Optional email sender. Defaults to Cloudflare Email Workers.
+ *                   Pass a nodemailer-backed function for Linux deployments.
  */
-export function createAuthIssuer(env: Env) {
+export function createAuthIssuer(
+  env: Env,
+  storage?: StorageAdapter,
+  sendCode?: (email: string, code: string) => Promise<void>,
+) {
   const providers: Record<string, ReturnType<typeof CodeProvider> | ReturnType<typeof PasswordProvider> | ReturnType<typeof GoogleProvider> | ReturnType<typeof GithubProvider>> = {};
+
+  const emailSender = sendCode ?? ((email: string, code: string) => sendVerificationEmail(env, email, code));
 
   // ── Code provider (passwordless email) — always available ───────────
   providers.code = CodeProvider(
@@ -71,7 +83,7 @@ export function createAuthIssuer(env: Env) {
         if (!isEmailAllowed(email, env)) {
           throw new Error('This email is not authorized. Registration is invite-only.');
         }
-        await sendVerificationEmail(env, email, code);
+        await emailSender(email, code);
       },
     }),
   );
@@ -83,7 +95,7 @@ export function createAuthIssuer(env: Env) {
         if (!isEmailAllowed(email, env)) {
           throw new Error('This email is not authorized. Registration is invite-only.');
         }
-        await sendVerificationEmail(env, email, code);
+        await emailSender(email, code);
       },
     }),
   );
@@ -113,7 +125,7 @@ export function createAuthIssuer(env: Env) {
   return issuer({
     providers,
     subjects,
-    storage: CloudflareStorage({ namespace: getKVBinding(env, 'AUTH_STORE') as any }),
+    storage: storage ?? CloudflareStorage({ namespace: getKVBinding(env, 'AUTH_STORE') as any }),
     allow: async () => true, // embedded issuer — all clients are trusted
     async success(ctx, value) {
       let email: string | undefined;

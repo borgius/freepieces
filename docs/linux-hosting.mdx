@@ -1,0 +1,174 @@
+export const meta = {
+  slug: 'linux-hosting',
+  title: 'Linux / Self-hosted Deployment',
+  summary: 'Run freepieces on any Linux host or Docker container without Cloudflare.',
+  section: 'deployment',
+  order: 30,
+  estimatedTime: '10 min',
+}
+
+# Linux / Self-hosted Deployment
+
+freepieces runs on any Linux host — VPS, Docker container, or systemd service — without a Cloudflare account. The HTTP API, admin SPA, and OpenAuth login flow are identical to the Cloudflare Worker deployment. Cloudflare-specific bindings are replaced by local equivalents.
+
+## Architecture differences
+
+| Feature | Cloudflare Workers | Linux / Node.js |
+| --- | --- | --- |
+| HTTP server | Cloudflare edge | `@hono/node-server` |
+| Token storage | Cloudflare KV | File-backed JSON (`data/token-store.json`) |
+| Auth sessions | Cloudflare KV | In-memory (`MemoryStorage`) — lost on restart |
+| Email codes | Cloudflare Email Workers | SMTP via nodemailer (console fallback in dev) |
+| Queue delivery | Cloudflare Queues | Not supported — returns HTTP 503 |
+| Static assets | ASSETS binding | Static files from `dist/public/` |
+
+## Prerequisites
+
+- Node.js ≥ 20
+- pnpm ≥ 10
+- An SMTP server for email verification codes (optional — falls back to console log)
+
+## Environment variables
+
+All existing `FREEPIECES_*` variables work unchanged. The following are Linux-only additions.
+
+### Server
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port to listen on |
+| `FREEPIECES_DATA_DIR` | `./data` | Directory for persistent data files |
+
+### SMTP
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SMTP_HOST` | — | SMTP server hostname. Leave unset for console-log fallback |
+| `SMTP_PORT` | `587` | SMTP port |
+| `SMTP_SECURE` | `false` | Set to `true` for TLS on port 465 |
+| `SMTP_USER` | — | SMTP username (omit for unauthenticated relay) |
+| `SMTP_PASS` | — | SMTP password |
+| `FREEPIECES_AUTH_SENDER_EMAIL` | — | From address for verification code emails |
+
+## Quickstart
+
+```bash
+# 1. Install dependencies
+pnpm install
+
+# 2. Create .env
+cp .env.example .env
+
+# 3. Edit .env — set at minimum:
+#   FREEPIECES_PUBLIC_URL=http://your-server:3000
+#   FREEPIECES_TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+#   FREEPIECES_RUN_API_KEY=fp_sk_$(openssl rand -hex 32)
+#   FREEPIECES_ADMIN_EMAILS=admin@example.com
+
+# 4. Build
+pnpm run build:admin && pnpm run build:linux
+
+# 5. Start
+pnpm start
+```
+
+Open `http://localhost:3000/admin/` and sign in.
+
+## Docker
+
+### Build and run
+
+```bash
+docker build -t freepieces .
+
+docker run -p 3000:3000 \
+  --env-file .env \
+  -v freepieces-data:/app/data \
+  freepieces
+```
+
+The container exposes port 3000 and mounts `/app/data` for persistent token storage.
+
+### Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  freepieces:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - freepieces-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  freepieces-data:
+```
+
+```bash
+docker compose up -d
+```
+
+## systemd service
+
+```ini
+# /etc/systemd/system/freepieces.service
+[Unit]
+Description=freepieces automation server
+After=network.target
+
+[Service]
+Type=simple
+User=freepieces
+WorkingDirectory=/opt/freepieces
+ExecStart=/opt/freepieces/scripts/start-linux.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now freepieces
+sudo journalctl -u freepieces -f
+```
+
+`scripts/start-linux.sh` loads `.env`, builds if needed, and starts the server.
+
+## Data directory layout
+
+```
+data/
+  token-store.json   # encrypted OAuth tokens (created automatically)
+```
+
+Auth session state is kept in memory and is lost on restart — users will need to sign in again after a server restart. OAuth tokens (for Gmail, Slack, etc.) persist in `token-store.json` and survive restarts.
+
+## Upgrading
+
+```bash
+git pull
+pnpm install
+pnpm run build:admin && pnpm run build:linux
+pnpm start              # or: sudo systemctl restart freepieces
+```
+
+## SMTP setup example
+
+For services like Gmail SMTP, Mailgun, or Postmark:
+
+```bash
+# .env
+SMTP_HOST=smtp.mailgun.org
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=postmaster@mg.example.com
+SMTP_PASS=your-mailgun-smtp-password
+FREEPIECES_AUTH_SENDER_EMAIL=noreply@example.com
+```
+
+When `SMTP_HOST` is not set, verification codes are logged to stdout instead. This is the recommended setup for local development.
