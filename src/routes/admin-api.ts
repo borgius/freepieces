@@ -27,6 +27,18 @@ import { requireEnvStr, requireKVBinding, getEnvBool } from '../lib/env';
 import { listAllSubscriptions, SUB_KEY, resolveQueueBinding } from '../lib/webhook';
 import type { WebhookSubscription } from '../lib/webhook';
 
+/** Allow HTTPS everywhere; allow HTTP only for loopback (local dev). */
+function isValidCallbackUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:') return true;
+    if (u.protocol === 'http:') {
+      return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+    }
+    return false;
+  } catch { return false; }
+}
+
 const authClientCache = new WeakMap<object, ReturnType<typeof createAuthClient>>();
 
 /**
@@ -383,13 +395,8 @@ adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
   if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
   if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
 
-  if (callbackUrl) {
-    try {
-      const u = new URL(callbackUrl);
-      if (u.protocol !== 'https:') throw new Error();
-    } catch {
-      return c.json({ error: 'callbackUrl must be a valid HTTPS URL' }, 400);
-    }
+  if (callbackUrl && !isValidCallbackUrl(callbackUrl)) {
+    return c.json({ error: 'callbackUrl must be a valid HTTPS URL (or http://localhost / http://127.0.0.1 for local dev)' }, 400);
   }
 
   if (queueName && !resolveQueueBinding(c.env, queueName)) {
@@ -427,13 +434,8 @@ adminApi.patch('/subscriptions/:piece/:id', async (c) => {
   if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
   if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
 
-  if (callbackUrl) {
-    try {
-      const u = new URL(callbackUrl);
-      if (u.protocol !== 'https:') throw new Error();
-    } catch {
-      return c.json({ error: 'callbackUrl must be a valid HTTPS URL' }, 400);
-    }
+  if (callbackUrl && !isValidCallbackUrl(callbackUrl)) {
+    return c.json({ error: 'callbackUrl must be a valid HTTPS URL (or http://localhost / http://127.0.0.1 for local dev)' }, 400);
   }
 
   if (queueName && !resolveQueueBinding(c.env, queueName)) {
@@ -547,6 +549,30 @@ adminApi.get('/triggers/groups', async (c) => {
   }));
 
   return c.json({ groups });
+});
+
+// GET /admin/api/test-events — list recently received test webhook payloads
+const TEST_EVENT_PREFIX = 'test_event:';
+
+adminApi.get('/test-events', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const { keys } = await kv.list({ prefix: TEST_EVENT_PREFIX });
+  const sorted = [...keys].sort((a, b) => b.name.localeCompare(a.name)); // newest first
+  const events = await Promise.all(
+    sorted.map(async (k) => {
+      const raw = await kv.get(k.name);
+      return raw ? (JSON.parse(raw) as unknown) : null;
+    })
+  );
+  return c.json({ events: events.filter(Boolean) });
+});
+
+// DELETE /admin/api/test-events — clear all stored test events
+adminApi.delete('/test-events', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const { keys } = await kv.list({ prefix: TEST_EVENT_PREFIX });
+  await Promise.all(keys.map((k) => kv.delete(k.name)));
+  return c.json({ ok: true, deleted: keys.length });
 });
 
 // Catch-all for unmatched admin API paths

@@ -14,9 +14,9 @@ import {
 import { LogOut } from 'lucide-react';
 import { LoginPage } from './pages/LoginPage';
 import { getMe, logout } from './lib/api';
+import { parseAdminUrl, pushAdminUrl, type Tab, type Section } from './lib/adminUrl';
 
 type View = 'loading' | 'login' | 'app';
-type Tab = 'pieces' | 'add-piece' | 'docs' | 'settings';
 
 const PiecesPage = lazy(async () => {
   const module = await import('./pages/PiecesPage');
@@ -41,7 +41,7 @@ const DocsPage = lazy(async () => {
 export function App() {
   const [view, setView] = useState<View>('loading');
   const [userEmail, setUserEmail] = useState('');
-  const [activeTab, setActiveTab] = useState<Tab>('pieces');
+  const [nav, setNav] = useState(() => parseAdminUrl());
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
@@ -53,6 +53,28 @@ export function App() {
       .catch(() => setView('login'));
   }, []);
 
+  // Sync state with browser back/forward
+  useEffect(() => {
+    function handlePop() { setNav(parseAdminUrl()); }
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, []);
+
+  function navigateTab(tab: Tab) {
+    pushAdminUrl(tab);
+    setNav({ tab, section: 'secrets', triggerId: undefined });
+  }
+
+  function navigateSection(section: Section) {
+    pushAdminUrl('settings', section);
+    setNav((n) => ({ ...n, section, triggerId: undefined }));
+  }
+
+  function navigateTriggerId(triggerId: string | undefined) {
+    pushAdminUrl('settings', 'triggers', triggerId);
+    setNav((n) => ({ ...n, triggerId }));
+  }
+
   async function handleLogout() {
     setLoggingOut(true);
     try {
@@ -60,7 +82,8 @@ export function App() {
     } finally {
       setLoggingOut(false);
       setUserEmail('');
-      setActiveTab('pieces');
+      pushAdminUrl('pieces');
+      setNav({ tab: 'pieces', section: 'secrets', triggerId: undefined });
       setView('login');
     }
   }
@@ -94,12 +117,12 @@ export function App() {
                       h="56px"
                       fontSize="sm"
                       fontWeight="medium"
-                      color={activeTab === tab ? 'blue.600' : 'gray.500'}
+                      color={nav.tab === tab ? 'blue.600' : 'gray.500'}
                       borderBottomWidth="2px"
-                      borderColor={activeTab === tab ? 'blue.500' : 'transparent'}
+                      borderColor={nav.tab === tab ? 'blue.500' : 'transparent'}
                       _hover={{ color: 'gray.800' }}
                       transition="all 0.15s"
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => navigateTab(tab)}
                     >
                       {label}
                     </Box>
@@ -130,10 +153,17 @@ export function App() {
               </Center>
             }
           >
-            {activeTab === 'pieces' && <PiecesPage />}
-            {activeTab === 'add-piece' && <AddPiecePage />}
-            {activeTab === 'docs' && <DocsPage />}
-            {activeTab === 'settings' && <SettingsPage />}
+            {nav.tab === 'pieces' && <PiecesPage />}
+            {nav.tab === 'add-piece' && <AddPiecePage />}
+            {nav.tab === 'docs' && <DocsPage />}
+            {nav.tab === 'settings' && (
+              <SettingsPage
+                section={nav.section}
+                triggerId={nav.triggerId}
+                onSectionChange={navigateSection}
+                onTriggerIdChange={navigateTriggerId}
+              />
+            )}
           </Suspense>
         </Box>
       )}

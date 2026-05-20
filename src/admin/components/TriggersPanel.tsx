@@ -15,7 +15,13 @@ import { type PieceInfo, type TriggerGroupsResponse, getTriggerGroups, listPiece
 import { TriggerGroupRow } from './TriggerGroupRow';
 import { AddTriggerForm } from './AddTriggerForm';
 
-export function TriggersPanel() {
+export function TriggersPanel({
+  expandedKey,
+  onExpandedChange,
+}: {
+  expandedKey: string | undefined;
+  onExpandedChange: (key: string | undefined) => void;
+}) {
   const [data, setData] = useState<TriggerGroupsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -118,7 +124,13 @@ export function TriggersPanel() {
       {!loading && !error && data && data.groups.length > 0 && (
         <VStack align="stretch" gap={3}>
           {data.groups.map((group) => (
-            <TriggerGroupRow key={group.endpointKey} group={group} onRefresh={fetchGroups} />
+            <TriggerGroupRow
+              key={group.endpointKey}
+              group={group}
+              onRefresh={fetchGroups}
+              isExpanded={expandedKey === group.endpointKey}
+              onToggle={(open) => onExpandedChange(open ? group.endpointKey : undefined)}
+            />
           ))}
         </VStack>
       )}

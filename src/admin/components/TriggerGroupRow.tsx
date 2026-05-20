@@ -147,11 +147,14 @@ function TriggerMemberRow({
 export function TriggerGroupRow({
   group,
   onRefresh,
+  isExpanded,
+  onToggle,
 }: {
   group: TriggerGroup;
   onRefresh: () => void;
+  isExpanded: boolean;
+  onToggle: (open: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(group.endpointValue);
   const [saving, setSaving] = useState(false);
@@ -188,17 +191,17 @@ export function TriggerGroupRow({
           as="button"
           color="gray.400"
           flexShrink={0}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => onToggle(!isExpanded)}
           cursor="pointer"
           _hover={{ color: 'gray.600' }}
         >
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </Box>
 
         <Box
           flex={1}
           minW={0}
-          onClick={() => !editing && setExpanded((v) => !v)}
+          onClick={() => !editing && onToggle(!isExpanded)}
           cursor={editing ? 'default' : 'pointer'}
         >
           {editing ? (
@@ -274,7 +277,7 @@ export function TriggerGroupRow({
         </HStack>
       </Flex>
 
-      {expanded && (
+      {isExpanded && (
         <Box px={4} py={3} bg="gray.50" borderTopWidth="1px" borderColor="gray.100">
           <VStack align="stretch" gap={2}>
             {group.members.map((member) => (

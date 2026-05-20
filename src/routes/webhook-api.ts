@@ -21,6 +21,18 @@ import { getEnvStr, requireKVBinding } from '../lib/env';
 import { buildNativeTriggerContext, buildApTriggerContext } from '../lib/ap-context';
 import { resolveNativeRuntimeAuth, resolveApRuntimeAuth } from '../lib/auth-resolve';
 
+/** Allow HTTPS everywhere; allow HTTP only for loopback (local dev). */
+function isValidCallbackUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:') return true;
+    if (u.protocol === 'http:') {
+      return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+    }
+    return false;
+  } catch { return false; }
+}
+
 const webhookApi = new Hono<{
   Bindings: Env;
   Variables: { credentials: RuntimeRequestCredentials };
@@ -55,6 +67,43 @@ async function buildLifecycleContext(
   if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
   return buildApTriggerContext(pieceName, stored.piece, auth, propsValue, {}, env, userId);
 }
+
+// ── Test webhook receiver — stores any incoming payload for admin review ──
+const TEST_EVENT_PREFIX = 'test_event:';
+const MAX_TEST_EVENTS = 100;
+
+webhookApi.post('/webhook/test', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const id = crypto.randomUUID();
+  const receivedAt = new Date().toISOString();
+  const ms = Date.now();
+
+  let body: unknown = null;
+  try { body = await c.req.json(); } catch { /* non-JSON body stored as null */ }
+
+  // Capture a safe subset of headers for debugging
+  const headers: Record<string, string> = {};
+  for (const key of ['content-type', 'user-agent', 'x-forwarded-for']) {
+    const v = c.req.header(key);
+    if (v) headers[key] = v;
+  }
+
+  const event = { id, receivedAt, headers, body };
+  const key = `${TEST_EVENT_PREFIX}${String(ms).padStart(16, '0')}:${id}`;
+  await kv.put(key, JSON.stringify(event), { expirationTtl: 60 * 60 * 24 }); // 24h TTL
+
+  // Trim oldest events when over the cap
+  const { keys } = await kv.list({ prefix: TEST_EVENT_PREFIX });
+  if (keys.length > MAX_TEST_EVENTS) {
+    const toDelete = keys
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, keys.length - MAX_TEST_EVENTS);
+    await Promise.all(toDelete.map((k) => kv.delete(k.name)));
+  }
+
+  console.log(`[freepieces] test webhook received id=${id}`);
+  return c.json({ ok: true, id, receivedAt });
+});
 
 // ── Inbound webhook (Slack Events API and equivalents) ──────────────────
 webhookApi.post('/webhook/:piece', async (c) => {
@@ -142,14 +191,9 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
     return c.json({ error: 'Missing required field: callbackUrl or queueName' }, 400);
   }
 
-  // Validate callbackUrl (HTTPS only to mitigate SSRF)
-  if (callbackUrl) {
-    try {
-      const parsed = new URL(callbackUrl);
-      if (parsed.protocol !== 'https:') throw new Error();
-    } catch {
-      return c.json({ error: 'callbackUrl must be a valid HTTPS URL' }, 400);
-    }
+  // Validate callbackUrl (HTTPS required; HTTP allowed for loopback in local dev)
+  if (callbackUrl && !isValidCallbackUrl(callbackUrl)) {
+    return c.json({ error: 'callbackUrl must be a valid HTTPS URL (or http://localhost / http://127.0.0.1 for local dev)' }, 400);
   }
 
   // Validate queueName binding exists in env

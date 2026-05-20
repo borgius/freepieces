@@ -220,3 +220,24 @@ export async function deleteAdminSubscription(piece: string, id: string): Promis
     method: 'DELETE',
   });
 }
+
+// ── Test events ───────────────────────────────────────────────────────────
+
+export interface TestEvent {
+  id: string;
+  receivedAt: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+export interface TestEventsResponse {
+  events: TestEvent[];
+}
+
+export async function getTestEvents(): Promise<TestEventsResponse> {
+  return apiFetch('/admin/api/test-events');
+}
+
+export async function clearTestEvents(): Promise<{ ok: boolean; deleted: number }> {
+  return apiFetch('/admin/api/test-events', { method: 'DELETE' });
+}

@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { Box, Flex, Text, VStack } from '@chakra-ui/react';
-import { KeyRound, Webhook } from 'lucide-react';
+import { KeyRound, TestTube2, Webhook } from 'lucide-react';
 import { SecretsPanel } from '../components/SecretsPanel';
+import { TestEventsPanel } from '../components/TestEventsPanel';
 import { TriggersPanel } from '../components/TriggersPanel';
 
-type Section = 'secrets' | 'triggers';
+type Section = 'secrets' | 'triggers' | 'test-events';
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'secrets', label: 'Secrets', icon: <KeyRound size={14} /> },
   { id: 'triggers', label: 'Triggers', icon: <Webhook size={14} /> },
+  { id: 'test-events', label: 'Test Webhooks', icon: <TestTube2 size={14} /> },
 ];
 
 export function SettingsPage() {
@@ -61,6 +63,7 @@ export function SettingsPage() {
       <Box flex={1} p={8} maxW="5xl">
         {activeSection === 'secrets' && <SecretsPanel />}
         {activeSection === 'triggers' && <TriggersPanel />}
+        {activeSection === 'test-events' && <TestEventsPanel />}
       </Box>
     </Flex>
   );
