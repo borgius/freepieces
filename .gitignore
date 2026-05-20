@@ -10,3 +10,4 @@ dist/
 wrangler.toml
 .hypergrep/
 test-results/
+data/token-store.json
