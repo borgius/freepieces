@@ -3,6 +3,10 @@ main = "src/worker.ts"
 compatibility_date = "2026-04-14"
 compatibility_flags = ["nodejs_compat"]
 
+[triggers]
+# Poll all POLLING-type trigger subscriptions every minute.
+crons = ["* * * * *"]
+
 [vars]
 # Public URL for building OAuth callback URLs.
 # Value is read from .env (gitignored) via wrangler's ${} interpolation.

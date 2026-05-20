@@ -441,7 +441,7 @@ describe('native WEBHOOK trigger subscriptions', () => {
     expect(onDisableSpy).toHaveBeenCalledOnce();
   });
 
-  it('rejects subscription for a native POLLING trigger (not webhook-capable)', async () => {
+  it('runtime endpoint rejects subscription for a native POLLING trigger (not webhook-capable)', async () => {
     const kv = new MemoryKv() as unknown as KVNamespace;
     const env = createEnv(kv);
 
@@ -700,5 +700,86 @@ describe('admin GET /admin/api/triggers/groups', () => {
     const body = await response.json() as { groups: Array<{ memberCount: number }> };
     expect(body.groups).toHaveLength(1);
     expect(body.groups[0].memberCount).toBe(2);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Admin POST /admin/api/subscriptions/:piece/:trigger
+// --------------------------------------------------------------------------
+
+describe('admin POST /admin/api/subscriptions/:piece/:trigger', () => {
+  function createAdminEnv(kv: KVNamespace): Env {
+    return {
+      FREEPIECES_PUBLIC_URL: 'https://freepieces.example.workers.dev',
+      FREEPIECES_TOKEN_STORE: kv,
+      FREEPIECES_AUTH_STORE: new MemoryKv() as unknown as KVNamespace,
+      FREEPIECES_TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      FREEPIECES_ADMIN_EMAILS: 'admin@example.com',
+    };
+  }
+
+  function adminSubscriptionRequest(piece: string, trigger: string, body: object): Request {
+    return new Request(
+      `https://freepieces.example.workers.dev/admin/api/subscriptions/${piece}/${trigger}`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: '__fp_admin=valid-admin-token; __fp_admin_refresh=valid-refresh',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  it('accepts a POLLING trigger subscription via the admin endpoint', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createAdminEnv(kv);
+
+    const response = await worker.fetch(
+      adminSubscriptionRequest('gmail', 'gmail_new_email_received', {
+        callbackUrl: 'https://example.com/cb',
+        propsValue: {},
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    // Admin endpoint now accepts POLLING triggers — freepieces polls on their behalf
+    expect(response.status).toBe(201);
+    const body = await response.json() as { ok: boolean; id: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBeTruthy();
+  });
+
+  it('accepts a WEBHOOK trigger subscription via the admin endpoint', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createAdminEnv(kv);
+
+    const response = await worker.fetch(
+      adminSubscriptionRequest('test-native-webhook', 'new-event', {
+        callbackUrl: 'https://example.com/cb',
+        propsValue: {},
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(201);
+  });
+
+  it('rejects unknown piece via admin endpoint', async () => {
+    const kv = new MemoryKv() as unknown as KVNamespace;
+    const env = createAdminEnv(kv);
+
+    const response = await worker.fetch(
+      adminSubscriptionRequest('no-such-piece', 'some-trigger', {
+        callbackUrl: 'https://example.com/cb',
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(404);
   });
 });

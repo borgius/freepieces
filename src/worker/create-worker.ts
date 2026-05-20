@@ -9,6 +9,7 @@ import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import { listPieces, getPiece } from '../framework/registry.js';
 import { dispatchWebhook } from '../lib/webhook.js';
+import { runAllPollingTriggers } from '../lib/polling.js';
 import adminApi from '../routes/admin-api.js';
 import authApi from '../routes/auth-api.js';
 import mcpApi from '../routes/mcp-api.js';
@@ -20,6 +21,7 @@ import type { Env } from '../framework/types.js';
 export interface FreepiecesWorker {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
   queue: (batch: MessageBatch, env: Env) => Promise<void>;
+  scheduled: (controller: ScheduledController, env: Env, ctx: ExecutionContext) => void | Promise<void>;
 }
 
 /**
@@ -135,6 +137,9 @@ export function createFreepiecesWorker(): FreepiecesWorker {
           msg.ack();
         }),
       );
+    },
+    async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+      ctx.waitUntil(runAllPollingTriggers(env));
     },
   } satisfies ExportedHandler<Env>;
 }

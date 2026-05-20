@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
-import { listPieces, getPiece, getTrigger, isTriggerWebhookCapable } from '../framework/registry';
+import { listPieces, getPiece, getTrigger } from '../framework/registry';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
 import { makeIssuerFetch, warmupIssuer } from '../lib/auth-issuer';
@@ -374,9 +374,6 @@ adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
 
   if (!getPiece(pieceName)) return c.json({ error: 'Piece not found' }, 404);
   if (!getTrigger(pieceName, triggerName)) return c.json({ error: 'Trigger not found' }, 404);
-  if (!isTriggerWebhookCapable(pieceName, triggerName)) {
-    return c.json({ error: 'Trigger does not support webhook subscriptions' }, 400);
-  }
 
   let body: { callbackUrl?: string; queueName?: string; pieceToken?: string; userId?: string; propsValue?: Record<string, unknown> };
   try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }

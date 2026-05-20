@@ -23,6 +23,7 @@ import { createFreepiecesWorker } from './worker/create-worker.js';
 import { getIssuerApp } from './lib/auth-issuer.js';
 import { createFileKV } from './lib/linux-kv.js';
 import { createSmtpSender } from './lib/linux-email.js';
+import { runAllPollingTriggers } from './lib/polling.js';
 import type { Env } from './framework/types.js';
 
 // ── Runtime shims ─────────────────────────────────────────────────────────
@@ -114,4 +115,8 @@ serve({ fetch: app.fetch, port }, () => {
     `${issuerBase}/oa/authorize?client_id=freepieces-worker` +
       `&redirect_uri=${redirectUri}&response_type=code&provider=code`,
   ).catch(() => {});
+
+  // Poll POLLING-type trigger subscriptions every minute (mirrors the cron
+  // trigger configured in wrangler.toml for the Cloudflare Worker).
+  setInterval(() => { void runAllPollingTriggers(env); }, 60_000);
 });

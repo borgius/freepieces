@@ -1,0 +1,4 @@
+{
+  "sub:gmail:6f0812a4-5a58-44f1-942d-edfae703766b": "{\"id\":\"6f0812a4-5a58-44f1-942d-edfae703766b\",\"trigger\":\"gmail_new_email_received\",\"propsValue\":{},\"callbackUrl\":\"https://localhost:3000/webhook/test\",\"createdAt\":\"2026-05-20T20:24:47.136Z\"}",
+  "sub:slack:e72bf7fe-0a54-4b37-bc73-72a3bb13ccea": "{\"id\":\"e72bf7fe-0a54-4b37-bc73-72a3bb13ccea\",\"trigger\":\"new-direct-message\",\"propsValue\":{},\"callbackUrl\":\"https://localhost:3000/webhook/test\",\"createdAt\":\"2026-05-20T20:24:47.138Z\"}"
+}
