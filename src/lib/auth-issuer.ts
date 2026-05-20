@@ -8,23 +8,32 @@
  */
 
 import { createAuthIssuer } from '../auth/issuer';
+import type { StorageAdapter } from '@openauthjs/openauth/storage/storage';
 import type { Env } from '../framework/types';
 
 const issuerAppCache = new WeakMap<object, ReturnType<typeof createAuthIssuer>>();
+
+export interface IssuerOpts {
+  storage?: StorageAdapter;
+  sendCode?: (email: string, code: string) => Promise<void>;
+}
 
 /**
  * Return the cached OpenAuth issuer app for this isolate, creating it once
  * on first call. Keyed on the AUTH_STORE KV binding (a stable object ref
  * per isolate) so the WeakMap entry lives as long as the isolate does.
+ *
+ * Pass `opts` on Linux/Node.js to inject MemoryStorage and SMTP sendCode
+ * instead of the Cloudflare-specific defaults.
  */
-export function getIssuerApp(env: Env): ReturnType<typeof createAuthIssuer> {
+export function getIssuerApp(env: Env, opts?: IssuerOpts): ReturnType<typeof createAuthIssuer> {
   const kvKey = (env as Record<string, unknown>)['FREEPIECES_AUTH_STORE']
     ?? (env as Record<string, unknown>)['FP_AUTH_STORE']
     ?? (env as Record<string, unknown>)['AUTH_STORE']
     ?? env;
   let issuerApp = issuerAppCache.get(kvKey as object);
   if (!issuerApp) {
-    issuerApp = createAuthIssuer(env);
+    issuerApp = createAuthIssuer(env, opts?.storage, opts?.sendCode);
     issuerAppCache.set(kvKey as object, issuerApp);
   }
   return issuerApp;

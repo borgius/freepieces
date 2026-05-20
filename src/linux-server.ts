@@ -102,4 +102,16 @@ app.all('*', (c) => worker.fetch(c.req.raw, env, noopCtx));
 const port = Number(process.env['PORT'] ?? 3000);
 serve({ fetch: app.fetch, port }, () => {
   console.log(`[freepieces] Server running at http://localhost:${port}`);
+
+  // Fire a warmup request to the issuer's /oa/authorize endpoint right after
+  // the server starts.  On a fresh process (or cold Cloudflare isolate when
+  // PUBLIC_URL points to production), the first authorize call imports an
+  // RSA-OAEP-512 key pair which takes 10+ seconds.  Starting it now means the
+  // key is ready by the time the user opens the browser and clicks Sign in.
+  const issuerBase = `http://localhost:${port}`;
+  const redirectUri = encodeURIComponent(`${issuerBase}/admin/api/callback`);
+  void fetch(
+    `${issuerBase}/oa/authorize?client_id=freepieces-worker` +
+      `&redirect_uri=${redirectUri}&response_type=code&provider=code`,
+  ).catch(() => {});
 });

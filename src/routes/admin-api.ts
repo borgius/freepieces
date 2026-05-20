@@ -71,7 +71,7 @@ adminApi.get('/callback', async (c) => {
   if (!code) return c.redirect('/admin/');
 
   const origin = new URL(c.req.url).origin;
-  const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;
+  const redirectUri = `${origin}/admin/api/callback`;
   const client = getAuthClient(c.env, origin);
   const exchanged = await client.exchange(code, redirectUri);
   if (exchanged.err) {
@@ -212,9 +212,10 @@ adminApi.get('/me', (c) => {
 
 // GET /admin/api/login-url — returns the OpenAuth authorization URL
 adminApi.get('/login-url', (c) => {
-  const redirectUri = `${requireEnvStr(c.env, 'PUBLIC_URL')}/admin/api/callback`;
+  const origin = new URL(c.req.url).origin;
+  const redirectUri = `${origin}/admin/api/callback`;
   const provider = c.req.query('provider') ?? 'code';
-  const issuerUrl = `${requireEnvStr(c.env, 'PUBLIC_URL')}/oa`;
+  const issuerUrl = `${origin}/oa`;
   const authorizationUrl = new URL(`${issuerUrl}/authorize`);
   authorizationUrl.searchParams.set('client_id', 'freepieces-worker');
   authorizationUrl.searchParams.set('redirect_uri', redirectUri);
