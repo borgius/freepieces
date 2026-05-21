@@ -1,5 +1,5 @@
-import { createPiece } from '../framework/piece';
-import type { Env, PieceActionContext, PropDefinition } from '../framework/types';
+import { createPiece, createTrigger } from '../framework/piece';
+import type { Env, PieceActionContext, PieceTriggerContext, PropDefinition } from '../framework/types';
 
 const DEFAULT_QUEUE_BINDING = 'QUEUE';
 const CONTENT_TYPES = new Set<QueueContentType>(['text', 'bytes', 'json', 'v8']);
@@ -82,6 +82,45 @@ async function sendBatch(ctx: PieceActionContext): Promise<unknown> {
   return { sent: batch.length };
 }
 
+// ---------------------------------------------------------------------------
+// Trigger: message_received
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload shape injected by the queue() worker handler for each incoming
+ * Cloudflare Queue message.
+ */
+interface QueueMessagePayload {
+  /** Raw message body as delivered by the Cloudflare Queue runtime. */
+  body: unknown;
+  /** Queue name as configured in wrangler.toml (from MessageBatch.queue). */
+  queue: string;
+}
+
+async function messageReceived(ctx: PieceTriggerContext): Promise<unknown[]> {
+  const payload = (ctx as unknown as Record<string, unknown>)['payload'] as QueueMessagePayload | undefined;
+  if (!payload) return [];
+  const filterQueue = readOptionalString(ctx.props ?? {}, 'queueName');
+  if (filterQueue && payload.queue !== filterQueue) return [];
+  return [payload];
+}
+
+const messageReceivedTrigger = createTrigger({
+  name: 'message_received',
+  displayName: 'Message Received',
+  description: 'Fires when a message arrives at the Cloudflare Queue consumer handler.',
+  type: 'WEBHOOK',
+  props: {
+    queueName: {
+      type: 'SHORT_TEXT',
+      displayName: 'Queue name',
+      description: 'Filter by queue name (as configured in wrangler.toml). Leave blank to receive from any queue.',
+      required: false,
+    },
+  },
+  run: messageReceived,
+});
+
 export const cloudflareQueuePiece = createPiece({
   name: 'cloudflare-queue',
   displayName: 'Cloudflare Queue',
@@ -118,4 +157,5 @@ export const cloudflareQueuePiece = createPiece({
       run: sendBatch,
     },
   ],
+  triggers: [messageReceivedTrigger],
 });

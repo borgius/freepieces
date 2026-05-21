@@ -1,11 +1,9 @@
-import { useState } from 'react';
 import { Box, Flex, Text, VStack } from '@chakra-ui/react';
 import { KeyRound, TestTube2, Webhook } from 'lucide-react';
 import { SecretsPanel } from '../components/SecretsPanel';
 import { TestEventsPanel } from '../components/TestEventsPanel';
 import { TriggersPanel } from '../components/TriggersPanel';
-
-type Section = 'secrets' | 'triggers' | 'test-events';
+import type { Section } from '../lib/adminUrl';
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'secrets', label: 'Secrets', icon: <KeyRound size={14} /> },
@@ -13,8 +11,15 @@ const SECTIONS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'test-events', label: 'Test Webhooks', icon: <TestTube2 size={14} /> },
 ];
 
-export function SettingsPage() {
-  const [activeSection, setActiveSection] = useState<Section>('secrets');
+interface Props {
+  section: Section;
+  triggerId: string | undefined;
+  onSectionChange: (section: Section) => void;
+  onTriggerIdChange: (triggerId: string | undefined) => void;
+}
+
+export function SettingsPage({ section, triggerId, onSectionChange, onTriggerIdChange }: Props) {
+  const activeSection = section;
 
   return (
     <Flex minH="calc(100vh - 56px)">
@@ -46,7 +51,7 @@ export function SettingsPage() {
               bg={activeSection === id ? 'blue.50' : 'transparent'}
               _hover={{ bg: activeSection === id ? 'blue.50' : 'gray.50' }}
               cursor="pointer"
-              onClick={() => setActiveSection(id)}
+              onClick={() => onSectionChange(id)}
               w="full"
               textAlign="left"
             >
@@ -62,7 +67,7 @@ export function SettingsPage() {
       {/* Content — widened to 5xl to accommodate grouped endpoint rows */}
       <Box flex={1} p={8} maxW="5xl">
         {activeSection === 'secrets' && <SecretsPanel />}
-        {activeSection === 'triggers' && <TriggersPanel />}
+        {activeSection === 'triggers' && <TriggersPanel expandedKey={triggerId} onExpandedChange={onTriggerIdChange} />}
         {activeSection === 'test-events' && <TestEventsPanel />}
       </Box>
     </Flex>

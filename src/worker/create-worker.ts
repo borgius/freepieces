@@ -122,18 +122,18 @@ export function createFreepiecesWorker(): FreepiecesWorker {
     async queue(batch: MessageBatch, env: Env): Promise<void> {
       await Promise.allSettled(
         batch.messages.map(async (msg) => {
-          const body = msg.body as { pieceName?: string; payload?: unknown };
-          const { pieceName, payload } = body;
-          if (!pieceName) {
-            msg.ack();
-            return;
+          // Fire the cloudflare-queue piece's message_received trigger for every message.
+          await dispatchWebhook('cloudflare-queue', { body: msg.body, queue: batch.queue }, env);
+
+          // Relay messages (body shape { pieceName, payload }) to their target piece.
+          const relayBody = msg.body as { pieceName?: string; payload?: unknown };
+          if (relayBody.pieceName) {
+            const stored = getPiece(relayBody.pieceName);
+            if (stored) {
+              await dispatchWebhook(relayBody.pieceName, relayBody.payload, env);
+            }
           }
-          const stored = getPiece(pieceName);
-          if (!stored) {
-            msg.ack();
-            return;
-          }
-          await dispatchWebhook(pieceName, payload, env);
+
           msg.ack();
         }),
       );

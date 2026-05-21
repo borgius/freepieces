@@ -95,3 +95,47 @@ describe('cloudflareQueuePiece', () => {
     })).rejects.toThrow('Queue binding "MISSING_QUEUE" was not found');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Trigger: message_received
+// ---------------------------------------------------------------------------
+
+function getTriggerDef(name: string) {
+  const t = cloudflareQueuePiece.triggers?.find((entry) => entry.name === name);
+  if (!t) throw new Error(`Missing trigger ${name}`);
+  return t;
+}
+
+describe('message_received trigger', () => {
+  it('is registered on the piece with type WEBHOOK', () => {
+    const t = getTriggerDef('message_received');
+    expect(t.type).toBe('WEBHOOK');
+  });
+
+  it('returns the payload when no queueName filter is set', async () => {
+    const t = getTriggerDef('message_received');
+    const payload = { body: { id: 1 }, queue: 'my-queue' };
+    const events = await t.run({ env: createEnv(), payload } as never);
+    expect(events).toEqual([payload]);
+  });
+
+  it('returns the payload when queueName matches', async () => {
+    const t = getTriggerDef('message_received');
+    const payload = { body: 'hello', queue: 'events' };
+    const events = await t.run({ env: createEnv(), props: { queueName: 'events' }, payload } as never);
+    expect(events).toEqual([payload]);
+  });
+
+  it('returns empty array when queueName does not match', async () => {
+    const t = getTriggerDef('message_received');
+    const payload = { body: 'hello', queue: 'other-queue' };
+    const events = await t.run({ env: createEnv(), props: { queueName: 'events' }, payload } as never);
+    expect(events).toEqual([]);
+  });
+
+  it('returns empty array when no payload is present', async () => {
+    const t = getTriggerDef('message_received');
+    const events = await t.run({ env: createEnv() } as never);
+    expect(events).toEqual([]);
+  });
+});

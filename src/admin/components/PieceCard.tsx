@@ -24,7 +24,6 @@ import {
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Copy, KeyRound, Trash2, Users, Webhook, Zap } from 'lucide-react';
 import { CollapsibleSection } from './ItemSection';
-import { McpSection } from './PieceMcpSection';
 
 const AUTH_PALETTE: Record<string, string> = {
   oauth2: 'purple',
@@ -490,8 +489,6 @@ export function PieceCard({ piece, onToggle }: Props) {
         <Text fontSize="sm" color="gray.600" lineClamp={2} minH="2.5rem">
           {piece.description ?? 'No description provided.'}
         </Text>
-
-        <McpSection piece={piece} />
 
         {piece.actions.length > 0 && (
           <CollapsibleSection
