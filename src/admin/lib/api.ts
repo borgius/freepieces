@@ -241,3 +241,21 @@ export async function getTestEvents(): Promise<TestEventsResponse> {
 export async function clearTestEvents(): Promise<{ ok: boolean; deleted: number }> {
   return apiFetch('/admin/api/test-events', { method: 'DELETE' });
 }
+
+export async function runActionAsAdmin(
+  pieceName: string,
+  actionName: string,
+  params: {
+    userId?: string;
+    pieceToken?: string;
+    props?: Record<string, unknown>;
+  }
+): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+  return apiFetch<{ ok: true; result: unknown } | { ok: false; error: string }>(
+    `/admin/api/run/${encodeURIComponent(pieceName)}/${encodeURIComponent(actionName)}`,
+    {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }
+  );
+}

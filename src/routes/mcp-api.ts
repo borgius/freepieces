@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { timeout } from 'hono/timeout';
 import { getPiece } from '../framework/registry';
 import { buildApContext } from '../lib/ap-context';
-import { resolveApRuntimeAuth, resolveNativeRuntimeAuth } from '../lib/auth-resolve';
+import { resolveApRuntimeAuth, resolveNativeRuntimeAuth, forceRefreshNativeAuth } from '../lib/auth-resolve';
 import { runtimeAuth } from '../lib/runtime-auth-middleware';
 import type { ApPiece, Env, PieceDefinition, PropDefinition } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
@@ -174,7 +174,16 @@ async function runTool(
     let auth = await resolveNativeRuntimeAuth(pieceName, stored.def.auth, env, userId, pieceToken);
     if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
 
-    return action.run({ auth, props: args, env });
+    return action.run({
+      auth,
+      props: args,
+      env,
+      refreshAuth: async () => {
+        const refreshed = await forceRefreshNativeAuth(pieceName, stored.def.auth, env, userId);
+        if (!refreshed) return undefined;
+        return pieceAuthProps ? { ...refreshed, ...pieceAuthProps } : refreshed;
+      },
+    });
   }
 
   const action = stored.piece._actions[toolName];

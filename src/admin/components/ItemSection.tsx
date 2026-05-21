@@ -20,9 +20,10 @@ import {
 } from '@chakra-ui/react';
 import { ChevronDown, ChevronRight, Copy, Link2, ScanSearch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { PieceAction, PieceTrigger, PropDef } from '../lib/api';
+import type { PieceAction, PieceTrigger, PropDef, PieceAuth } from '../lib/api';
 
 import { ActionUsageTab, baseUrl, ItemMcpTab, PropTable, TriggerUsageTab } from './ItemUsage';
+import { ActionTryItTab } from './ItemTryIt';
 
 // --------------------------------------------------------------------------
 // Single action / trigger row with expand/collapse
@@ -40,6 +41,8 @@ interface ItemRowProps {
   kind: 'action' | 'trigger';
   /** Trigger strategy, e.g. 'POLLING', 'APP_WEBHOOK', 'WEBHOOK'. Only set when kind='trigger'. */
   triggerType?: string;
+  pieceAuth?: PieceAuth;
+  pieceSupportsUsers?: boolean;
 }
 
 function ItemRow({
@@ -53,6 +56,8 @@ function ItemRow({
   badgePalette = 'gray',
   kind,
   triggerType,
+  pieceAuth,
+  pieceSupportsUsers,
 }: ItemRowProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const hasParams = props && Object.keys(props).length > 0;
@@ -137,6 +142,9 @@ function ItemRow({
                   <Tabs.Trigger value="params">Params {hasParams ? `(${paramCount})` : ''}</Tabs.Trigger>
                   <Tabs.Trigger value="usage">Usage</Tabs.Trigger>
                   <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
+                  {kind === 'action' && (
+                    <Tabs.Trigger value="tryit">Try it</Tabs.Trigger>
+                  )}
                 </Tabs.List>
                 <Tabs.Content value="params">
                   {hasParams
@@ -153,6 +161,17 @@ function ItemRow({
                 <Tabs.Content value="mcp">
                   <ItemMcpTab pieceName={pieceName} />
                 </Tabs.Content>
+                {kind === 'action' && (
+                  <Tabs.Content value="tryit">
+                    <ActionTryItTab
+                      pieceName={pieceName}
+                      actionName={name}
+                      props={props}
+                      pieceAuth={pieceAuth}
+                      pieceSupportsUsers={pieceSupportsUsers ?? false}
+                    />
+                  </Tabs.Content>
+                )}
               </Tabs.Root>
             </DialogBody>
           </DialogContent>
@@ -176,6 +195,8 @@ interface SectionProps {
   badgePalette?: string;
   items: Array<PieceAction | PieceTrigger>;
   kind: 'action' | 'trigger';
+  pieceAuth?: PieceAuth;
+  pieceSupportsUsers?: boolean;
 }
 
 function CollapsibleSection({
@@ -188,6 +209,8 @@ function CollapsibleSection({
   badgePalette,
   items,
   kind,
+  pieceAuth,
+  pieceSupportsUsers,
 }: SectionProps) {
   const [open, setOpen] = useState(false);
 
@@ -276,6 +299,8 @@ function CollapsibleSection({
               badgePalette={badgePalette}
               kind={kind}
               triggerType={kind === 'trigger' ? (item as PieceTrigger).type : undefined}
+              pieceAuth={pieceAuth}
+              pieceSupportsUsers={pieceSupportsUsers}
             />
           ))}
         </VStack>

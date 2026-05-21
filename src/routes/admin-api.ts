@@ -8,6 +8,8 @@
 import { Hono } from 'hono';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { listPieces, getPiece, getTrigger } from '../framework/registry';
+import { resolveNativeRuntimeAuth, resolveApRuntimeAuth, forceRefreshNativeAuth } from '../lib/auth-resolve';
+import { buildApContext } from '../lib/ap-context';
 import { listStoredUserIds, deleteToken } from '../lib/token-store';
 import { createAuthClient, subjects } from '../auth/client';
 import { makeIssuerFetch, warmupIssuer } from '../lib/auth-issuer';
@@ -573,6 +575,53 @@ adminApi.delete('/test-events', async (c) => {
   const { keys } = await kv.list({ prefix: TEST_EVENT_PREFIX });
   await Promise.all(keys.map((k) => kv.delete(k.name)));
   return c.json({ ok: true, deleted: keys.length });
+});
+
+// POST /admin/api/run/:piece/:action — admin-privileged action execution (Try it)
+adminApi.post('/run/:piece/:action', async (c) => {
+  const pieceName = c.req.param('piece');
+  const actionName = c.req.param('action');
+  const stored = getPiece(pieceName);
+  if (!stored) return c.json({ error: 'Piece not found' }, 404);
+
+  let body: { userId?: string; pieceToken?: string; props?: Record<string, unknown> } = {};
+  try { body = await c.req.json(); } catch { /* empty body is fine */ }
+
+  const { userId, pieceToken, props = {} } = body;
+
+  try {
+    let result: unknown;
+
+    if (stored.kind === 'native') {
+      const piece = stored.def;
+      const action = piece.actions.find((a) => a.name === actionName);
+      if (!action) return c.json({ error: 'Action not found' }, 404);
+
+      const auth = await resolveNativeRuntimeAuth(pieceName, piece.auth, c.env, userId, pieceToken);
+      result = await action.run({
+        auth,
+        props,
+        env: c.env,
+        refreshAuth: async () => {
+          const refreshed = await forceRefreshNativeAuth(pieceName, piece.auth, c.env, userId);
+          return refreshed ?? undefined;
+        },
+      });
+    } else {
+      const { piece } = stored;
+      const action = piece._actions[actionName];
+      if (!action) return c.json({ error: 'Action not found' }, 404);
+
+      const auth = await resolveApRuntimeAuth(pieceName, piece, c.env, userId, pieceToken);
+      const apCtx = buildApContext(pieceName, piece, auth, props, c.env);
+      result = await action.run(apCtx);
+    }
+
+    return c.json({ ok: true, result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Action execution failed';
+    return c.json({ ok: false, error: message }, 500);
+  }
 });
 
 // Catch-all for unmatched admin API paths

@@ -499,6 +499,8 @@ export function PieceCard({ piece, onToggle }: Props) {
             pieceName={piece.name}
             items={piece.actions}
             kind="action"
+            pieceAuth={piece.auth}
+            pieceSupportsUsers={piece.supportsUsers}
           />
         )}
 
