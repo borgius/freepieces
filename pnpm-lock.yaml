@@ -41,6 +41,9 @@ importers:
       jose:
         specifier: ^6.2.2
         version: 6.2.2
+      jq-web:
+        specifier: 0.6.2
+        version: 0.6.2
       lucide-react:
         specifier: ^1.8.0
         version: 1.8.0(react@19.2.5)
@@ -2061,6 +2064,9 @@ packages:
 
   jose@6.2.2:
     resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
+
+  jq-web@0.6.2:
+    resolution: {integrity: sha512-+7XvjBYwTx4vP5PYkf6Q6orubO/v+UgMU6By1GritrmShr9QpT3UKa4ANzXWQfhdqtBnQYXsm7ZNbdIHT6tYpQ==}
 
   js-base64@3.7.8:
     resolution: {integrity: sha512-hNngCeKxIUQiEUN3GPJOkz4wF/YvdUdbNL9hsBcMQTkKzboD7T/q3OYOuuPZLUE6dBxSGpwhk5mwuDud7JVAow==}
@@ -5565,6 +5571,8 @@ snapshots:
   jose@5.9.6: {}
 
   jose@6.2.2: {}
+
+  jq-web@0.6.2: {}
 
   js-base64@3.7.8: {}
 

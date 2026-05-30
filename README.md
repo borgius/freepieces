@@ -286,7 +286,21 @@ Matched events are sent to the queue as JSON with the same shape as the HTTP del
 
 **3. Consume the queue** in a separate Worker (or the same Worker with a `queue()` handler) bound as a consumer.
 
-`callbackUrl` and `queueName` are mutually exclusive — provide exactly one per subscription.
+`callbackUrl`, `queueName`, and `command` are mutually exclusive — provide exactly one per subscription.
+
+### Customizing webhook delivery
+
+Callback subscriptions accept optional delivery fields:
+
+- `method` — HTTP method for the callback (`POST`, `PUT`, `PATCH`, `DELETE`, `GET`; defaults to `POST`).
+- `headers` — additional request headers. Values may inject env bindings / wrangler secrets with `${NAME}` syntax, resolved at delivery time (secret values are never stored on the subscription or sent to the admin UI).
+- `jqTransform` — a [jq](https://jqlang.github.io/jq/) program applied to the `{ piece, trigger, events }` envelope before delivery. Use `POST /admin/api/subscriptions/jq-sample` (or the admin Triggers panel's **Validate / Preview** button) to test a program against a sample payload.
+
+### CLI command delivery (self-hosted Node.js only)
+
+Instead of `callbackUrl`/`queueName`, a subscription can run a local `command` and pass the matched-events envelope to it on stdin. This requires the self-hosted Node.js runtime — Cloudflare Workers cannot spawn processes, so the API rejects `command` subscriptions there. The command runs with `spawn` and no shell, supports `args` (with `${ENV}` injection), `cwd`, and `timeoutMs`. See [docs/triggers.mdx](docs/triggers.mdx) for the full contract.
+
+See [docs/triggers.mdx](docs/triggers.mdx) for request method/header injection, the CLI hook type, and the jq transform/preview flow in detail.
 
 ### SDK usage
 

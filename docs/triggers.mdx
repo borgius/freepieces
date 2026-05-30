@@ -9,9 +9,10 @@ export const meta = {
 
 # Triggers in freepieces
 
-This document explains how triggers work in freepieces, with a focus on **webhook-based triggers** and the two delivery options for matched events:
+This document explains how triggers work in freepieces, with a focus on **webhook-based triggers** and the delivery options for matched events:
 
-- **webhook callback delivery** to your HTTPS endpoint
+- **webhook callback delivery** to your HTTPS endpoint (with a configurable request method, custom headers, and env/secret injection)
+- **CLI command delivery** that runs a local command (self-hosted Node.js runtime only)
 - **queue delivery** to a Cloudflare Queue
 
 If you want the complete auth model behind runtime headers, stored tokens, admin auth, and webhook signature checks, read [Authentication](./auth.mdx).
@@ -187,7 +188,7 @@ If `RUN_API_KEY` is not configured, the bearer token remains the fallback for lo
 
 ### Request body
 
-Provide exactly one delivery target.
+Provide exactly one delivery target: `callbackUrl`, `queueName`, or `command`.
 
 ```json
 {
@@ -211,10 +212,26 @@ Or:
 
 Rules:
 
-- `callbackUrl` and `queueName` are mutually exclusive
-- one of them is required
+- `callbackUrl`, `queueName`, and `command` are mutually exclusive
+- exactly one of them is required
 - `callbackUrl` must be a valid **HTTPS** URL
 - `queueName` must resolve to a configured queue producer binding in `wrangler.toml`
+- `command` is only accepted on the self-hosted Node.js runtime (see [CLI command delivery](#cli-command-delivery))
+
+### Optional delivery fields
+
+These optional fields refine how matched events are delivered:
+
+| Field | Applies to | Description |
+| --- | --- | --- |
+| `method` | `callbackUrl` | HTTP method for the callback request. One of `POST`, `PUT`, `PATCH`, `DELETE`, `GET`. Defaults to `POST`. |
+| `headers` | `callbackUrl` | Object of additional request headers (`string` → `string`). Values may contain `${ENV}` injection references (see below). |
+| `args` | `command` | Array of string arguments passed to the command. Values may contain `${ENV}` references. |
+| `cwd` | `command` | Working directory for the command. |
+| `timeoutMs` | `command` | Command timeout in milliseconds (capped at 300000). |
+| `jqTransform` | all | A jq program applied to the outbound `{ piece, trigger, events }` envelope before delivery (see [jq transform](#jq-transform)). |
+
+The injection helper caps headers (50 max, 256-char names, 8192-char values), jq programs (10000 chars), and CLI args (100 max) to keep records bounded.
 
 ### Response shape
 
@@ -259,6 +276,43 @@ The callback receives JSON in this shape:
 }
 ```
 
+### Request method and custom headers
+
+By default the callback is delivered as `POST` with `content-type: application/json`. You can override the method and add custom headers:
+
+```json
+{
+  "callbackUrl": "https://example.com/events",
+  "method": "PUT",
+  "headers": {
+    "x-source": "freepieces"
+  }
+}
+```
+
+- `method` must be one of `POST`, `PUT`, `PATCH`, `DELETE`, `GET` (defaults to `POST`)
+- `headers` are merged on top of the default `content-type: application/json`
+- header values support `${ENV}` injection (see below)
+
+### Header value injection
+
+Header values may reference Worker environment bindings (wrangler secrets / `.dev.vars`) using `${NAME}` syntax. References are resolved **at delivery time** so secret values are never stored on the subscription record and never returned to the admin UI — only the **names** of available secrets are surfaced as hints.
+
+```json
+{
+  "callbackUrl": "https://example.com/events",
+  "headers": {
+    "authorization": "Bearer ${SLACK_BOT_TOKEN}"
+  }
+}
+```
+
+Resolution rules:
+
+- `${NAME}` is resolved via the same env lookup as the rest of freepieces, trying the canonical `FREEPIECES_NAME`, `FP_NAME`, and bare `NAME` forms
+- an unknown reference resolves to an empty string
+- the same `${ENV}` syntax also works in CLI command `args`
+
 ### When webhook callbacks are a good fit
 
 Choose `callbackUrl` when:
@@ -271,6 +325,37 @@ Choose `callbackUrl` when:
 ### Callback trade-offs
 
 Webhook callbacks are straightforward, but they require a reachable HTTPS endpoint. If you do not want a public callback endpoint, queue delivery is often cleaner.
+
+## CLI command delivery
+
+When you use `command`, freepieces runs a local command for each delivery and passes the matched-events envelope to it as JSON on **stdin**.
+
+> **Runtime limitation:** CLI hooks spawn a child process and therefore only work on the **self-hosted Node.js runtime** (`linux-server.ts`). Cloudflare Workers cannot spawn processes, so the API rejects `command` subscriptions at create time on the Workers runtime, and dispatch skips them if one is ever encountered there. Check `GET /admin/api/runtime` (`supportsCliHooks`) before offering CLI delivery in a UI.
+
+```json
+{
+  "command": "/usr/local/bin/notify",
+  "args": ["--source", "freepieces", "--token", "${API_TOKEN}"],
+  "cwd": "/srv/hooks",
+  "timeoutMs": 30000
+}
+```
+
+### CLI flow
+
+```text
+Provider webhook
+  -> /webhook/:piece
+  -> trigger filtering
+  -> spawn command (stdin = { piece, trigger, events })
+```
+
+Security posture:
+
+- the command is run with `spawn` and **no shell** (`shell: false`), so arguments are never interpolated into a shell — there is no shell-injection surface
+- `${ENV}` references in `args` are resolved from env bindings the same way as header injection
+- output is capped (1 MB) and the process is killed after `timeoutMs` (default 30s, capped at 300s)
+- treat `command`/`args` as admin-authored config; only trusted admins can create subscriptions
 
 ## Queue delivery
 
@@ -383,6 +468,49 @@ A good rule:
 
 - choose **webhooks** when another web app should receive the event directly
 - choose **queues** when another Worker should process the event asynchronously
+
+## jq transform
+
+`jqTransform` is an optional [jq](https://jqlang.github.io/jq/) program applied to the outbound `{ piece, trigger, events }` envelope **before** it is delivered. It works with every delivery target (callback, queue, CLI).
+
+```json
+{
+  "callbackUrl": "https://example.com/events",
+  "jqTransform": "{ count: (.events | length), first: .events[0] }"
+}
+```
+
+Behavior:
+
+- the program receives the full envelope as input and its output replaces the delivered body
+- if the program has a syntax error or fails to evaluate at delivery time, freepieces **logs and skips** that delivery rather than sending the raw payload
+- programs are validated (best effort) and length-capped at save time
+
+> **Runtime note:** the jq engine (`@stainless-api/jq-web` style WASM, via `jq-web`) loads its WebAssembly at runtime and is exercised on the self-hosted Node.js runtime. Treat jq transform and the preview endpoint as Node-runtime features.
+
+### Preview / validate a jq program
+
+Use the admin-only preview endpoint to test a program against a sample envelope before saving:
+
+```text
+POST /admin/api/subscriptions/jq-sample
+```
+
+Request body:
+
+```json
+{
+  "piece": "slack",
+  "trigger": "new-message",
+  "program": "{ count: (.events | length) }",
+  "sample": { "events": [{ "id": "a" }, { "id": "b" }] }
+}
+```
+
+- if `sample` already contains an `events` array it is used as the envelope directly; otherwise the value is wrapped as `{ piece, trigger, events: [...] }`
+- the response is `{ ok: true, input, result }` on success or `{ ok: false, input, error }` on a jq error
+
+The admin Triggers panel wires a **Validate / Preview** button to this endpoint and shows the transformed output (or the error) inline.
 
 ## Slack example
 
@@ -586,6 +714,12 @@ If you are just choosing between webhook callbacks and queue delivery for subscr
 - your consumer is a Worker
 - you want Cloudflare-native async delivery
 - you do not want a public callback endpoint
+
+### Use `command` when
+
+- you self-host on the Node.js runtime
+- you want to run a local script/binary for each match
+- the consumer is a CLI tool rather than an HTTP service
 
 ### Use `/trigger/...` when
 

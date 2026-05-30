@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   Box,
@@ -9,8 +9,17 @@ import {
   VStack,
 } from '@chakra-ui/react';
 import { Plus, Trash2, X } from 'lucide-react';
-import { type PieceInfo, createAdminSubscription } from '../lib/api';
+import {
+  type PieceInfo,
+  type SubscriptionDeliveryBody,
+  createAdminSubscription,
+  getRuntimeInfo,
+  getSecrets,
+} from '../lib/api';
 import { InlineInput, InlineSelect } from './TriggerInlineControls';
+import { ArgsEditor, EnvHints, HeadersEditor, JqTransformField } from './WebhookDeliveryFields';
+
+const HTTP_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE', 'GET'] as const;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -133,12 +142,40 @@ export function AddTriggerForm({
   const [rows, setRows] = useState<PieceRow[]>([
     { id: crypto.randomUUID(), pieceName: defaultPiece, selectedTriggers: new Set() },
   ]);
-  const [deliveryType, setDeliveryType] = useState<'callbackUrl' | 'queueName'>('callbackUrl');
+  const [deliveryType, setDeliveryType] = useState<'callbackUrl' | 'queueName' | 'command'>('callbackUrl');
   const [deliveryValue, setDeliveryValue] = useState('');
+  const [method, setMethod] = useState<(typeof HTTP_METHODS)[number]>('POST');
+  const [headerRows, setHeaderRows] = useState<Array<{ id: string; name: string; value: string }>>([]);
+  const [argRows, setArgRows] = useState<Array<{ id: string; value: string }>>([]);
+  const [cwd, setCwd] = useState('');
+  const [jqTransform, setJqTransform] = useState('');
   const [authMode, setAuthMode] = useState<'none' | 'pieceToken' | 'userId'>('none');
   const [authValue, setAuthValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [supportsCli, setSupportsCli] = useState(false);
+  const [envNames, setEnvNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    getRuntimeInfo().then((r) => setSupportsCli(r.supportsCliHooks)).catch(() => {});
+    getSecrets()
+      .then((s) => {
+        const names = new Set<string>();
+        for (const g of s.global) names.add(g.key);
+        for (const p of s.pieces) for (const grp of p.groups) for (const sec of grp.secrets) names.add(sec.key);
+        setEnvNames([...names].sort());
+      })
+      .catch(() => {});
+  }, []);
+
+  // First selected (piece, trigger) pair — used to seed the jq preview sample.
+  const firstSelection = useMemo(() => {
+    for (const r of rows) {
+      const t = [...r.selectedTriggers][0];
+      if (t) return { piece: r.pieceName, trigger: t };
+    }
+    return { piece: rows[0]?.pieceName, trigger: undefined as string | undefined };
+  }, [rows]);
 
   function addRow() {
     setRows((prev) => [...prev, { id: crypto.randomUUID(), pieceName: defaultPiece, selectedTriggers: new Set() }]);
@@ -173,8 +210,30 @@ export function AddTriggerForm({
     setSaving(true);
     setError('');
     try {
-      const body: Parameters<typeof createAdminSubscription>[2] = {
-        ...(deliveryType === 'callbackUrl' ? { callbackUrl: deliveryValue.trim() } : { queueName: deliveryValue.trim() }),
+      const headers: Record<string, string> = {};
+      for (const h of headerRows) {
+        if (h.name.trim() !== '') headers[h.name.trim()] = h.value;
+      }
+      const args = argRows.map((a) => a.value).filter((v) => v.trim() !== '');
+
+      const delivery: SubscriptionDeliveryBody =
+        deliveryType === 'callbackUrl'
+          ? {
+              callbackUrl: deliveryValue.trim(),
+              ...(method !== 'POST' ? { method } : {}),
+              ...(Object.keys(headers).length > 0 ? { headers } : {}),
+            }
+          : deliveryType === 'queueName'
+            ? { queueName: deliveryValue.trim() }
+            : {
+                command: deliveryValue.trim(),
+                ...(args.length > 0 ? { args } : {}),
+                ...(cwd.trim() !== '' ? { cwd: cwd.trim() } : {}),
+              };
+
+      const body: SubscriptionDeliveryBody = {
+        ...delivery,
+        ...(jqTransform.trim() !== '' ? { jqTransform: jqTransform } : {}),
         ...(authMode === 'pieceToken' && authValue ? { pieceToken: authValue } : {}),
         ...(authMode === 'userId' && authValue ? { userId: authValue } : {}),
       };
@@ -205,27 +264,89 @@ export function AddTriggerForm({
           <Text fontSize="2xs" color="gray.500" mb={1} fontWeight="medium">Delivery target *</Text>
           <Flex gap={2} align="center" flexWrap="wrap">
             <HStack gap={1} flexShrink={0}>
-              {(['callbackUrl', 'queueName'] as const).map((t) => (
-                <Button
-                  key={t}
-                  size="xs"
-                  variant={deliveryType === t ? 'solid' : 'outline'}
-                  colorPalette={deliveryType === t ? 'blue' : 'gray'}
-                  onClick={() => { setDeliveryType(t); setDeliveryValue(''); }}
-                >
-                  {t === 'callbackUrl' ? 'HTTPS URL' : 'Queue name'}
-                </Button>
-              ))}
+              {(['callbackUrl', 'queueName', 'command'] as const)
+                .filter((t) => t !== 'command' || supportsCli)
+                .map((t) => (
+                  <Button
+                    key={t}
+                    size="xs"
+                    variant={deliveryType === t ? 'solid' : 'outline'}
+                    colorPalette={deliveryType === t ? 'blue' : 'gray'}
+                    onClick={() => { setDeliveryType(t); setDeliveryValue(''); }}
+                  >
+                    {t === 'callbackUrl' ? 'HTTPS URL' : t === 'queueName' ? 'Queue name' : 'CLI command'}
+                  </Button>
+                ))}
             </HStack>
             <Box flex={1} minW="200px">
               <InlineInput
                 value={deliveryValue}
                 onChange={setDeliveryValue}
-                placeholder={deliveryType === 'callbackUrl' ? 'https://your-server.example.com/hook' : 'my-queue-name'}
+                placeholder={
+                  deliveryType === 'callbackUrl'
+                    ? 'https://your-server.example.com/hook'
+                    : deliveryType === 'queueName'
+                      ? 'my-queue-name'
+                      : '/usr/local/bin/my-hook'
+                }
                 autoFocus
               />
             </Box>
           </Flex>
+          {!supportsCli && (
+            <Text fontSize="2xs" color="gray.400" mt={1}>
+              CLI command hooks are available only on the self-hosted Node.js runtime.
+            </Text>
+          )}
+        </Box>
+
+        {/* HTTP method + headers — only for callback URLs */}
+        {deliveryType === 'callbackUrl' && (
+          <>
+            <Box>
+              <Text fontSize="2xs" color="gray.500" mb={1} fontWeight="medium">Request method</Text>
+              <Box maxW="160px">
+                <InlineSelect
+                  value={method}
+                  onChange={(v) => setMethod(v as (typeof HTTP_METHODS)[number])}
+                  options={HTTP_METHODS.map((m) => ({ value: m, label: m }))}
+                />
+              </Box>
+            </Box>
+            <Box>
+              <Text fontSize="2xs" color="gray.500" mb={1} fontWeight="medium">Additional headers</Text>
+              <HeadersEditor rows={headerRows} onChange={setHeaderRows} />
+              <EnvHints names={envNames} />
+            </Box>
+          </>
+        )}
+
+        {/* CLI command extras */}
+        {deliveryType === 'command' && (
+          <>
+            <Box>
+              <Text fontSize="2xs" color="gray.500" mb={1} fontWeight="medium">Arguments</Text>
+              <ArgsEditor rows={argRows} onChange={setArgRows} />
+              <EnvHints names={envNames} />
+            </Box>
+            <Box>
+              <Text fontSize="2xs" color="gray.500" mb={1} fontWeight="medium">Working directory</Text>
+              <Box maxW="320px">
+                <InlineInput value={cwd} onChange={setCwd} placeholder="/path/to/cwd (optional)" />
+              </Box>
+            </Box>
+          </>
+        )}
+
+        {/* jq transform — all delivery types */}
+        <Box>
+          <Text fontSize="2xs" color="gray.500" mb={1} fontWeight="medium">jq transform (optional)</Text>
+          <JqTransformField
+            value={jqTransform}
+            onChange={setJqTransform}
+            piece={firstSelection.piece}
+            trigger={firstSelection.trigger}
+          />
         </Box>
 
         {/* Authentication — second */}

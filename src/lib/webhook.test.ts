@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { listSubscriptions } from './webhook';
+import { listSubscriptions, interpolateEnvRefs, resolveHeaderInjections, isWebhookMethod, WEBHOOK_METHODS } from './webhook';
 import { USER_TOOL_STATE_KEY } from './user-tool-state';
 
 function makeKV(pages: Array<{ keys: { name: string }[]; list_complete: boolean; cursor?: string }>, records: Record<string, string>) {
@@ -127,5 +127,159 @@ describe('dispatchWebhook', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('applies method, injected headers, and jq transform when delivering to a callback URL', async () => {
+    vi.resetModules();
+
+    const triggerRun = vi.fn().mockResolvedValue([{ id: 'evt-1' }, { id: 'evt-2' }]);
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    try {
+      const { dispatchWebhook } = await import('./webhook.js');
+      const { registerPiece } = await import('../framework/registry.js');
+
+      registerPiece({
+        name: 'dispatch-headers-test',
+        displayName: 'Dispatch Headers Test',
+        version: '1.0.0',
+        auth: { type: 'none' },
+        actions: [],
+        triggers: [
+          {
+            name: 'new-event',
+            displayName: 'New Event',
+            description: 'Dispatch test trigger.',
+            type: 'WEBHOOK',
+            props: {},
+            run: triggerRun,
+          },
+        ],
+      });
+
+      const kv = makeKV(
+        [{ keys: [{ name: 'sub:dispatch-headers-test:sub-1' }], list_complete: true, cursor: '' }],
+        {
+          'sub:dispatch-headers-test:sub-1': JSON.stringify({
+            id: 'sub-1',
+            trigger: 'new-event',
+            propsValue: {},
+            callbackUrl: 'https://example.com/callback',
+            method: 'PUT',
+            headers: { 'x-inject': 'val-${GREETING}', 'x-static': 'hi' },
+            jqTransform: '{ count: (.events | length) }',
+            createdAt: '2026-05-24T00:00:00.000Z',
+          }),
+        },
+      );
+
+      await dispatchWebhook('dispatch-headers-test', { ok: true }, {
+        FREEPIECES_TOKEN_STORE: kv,
+        FREEPIECES_GREETING: 'hello',
+      } as never);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://example.com/callback');
+      expect(init.method).toBe('PUT');
+      const headers = init.headers as Record<string, string>;
+      expect(headers['x-inject']).toBe('val-hello');
+      expect(headers['x-static']).toBe('hi');
+      expect(headers['content-type']).toBe('application/json');
+      // jq transform replaced the payload with the computed envelope
+      expect(JSON.parse(init.body as string)).toEqual({ count: 2 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('skips delivery when the jq transform program is invalid', async () => {
+    vi.resetModules();
+
+    const triggerRun = vi.fn().mockResolvedValue([{ id: 'evt-1' }]);
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const { dispatchWebhook } = await import('./webhook.js');
+      const { registerPiece } = await import('../framework/registry.js');
+
+      registerPiece({
+        name: 'dispatch-badjq-test',
+        displayName: 'Dispatch Bad jq Test',
+        version: '1.0.0',
+        auth: { type: 'none' },
+        actions: [],
+        triggers: [
+          {
+            name: 'new-event',
+            displayName: 'New Event',
+            description: 'Dispatch test trigger.',
+            type: 'WEBHOOK',
+            props: {},
+            run: triggerRun,
+          },
+        ],
+      });
+
+      const kv = makeKV(
+        [{ keys: [{ name: 'sub:dispatch-badjq-test:sub-1' }], list_complete: true, cursor: '' }],
+        {
+          'sub:dispatch-badjq-test:sub-1': JSON.stringify({
+            id: 'sub-1',
+            trigger: 'new-event',
+            propsValue: {},
+            callbackUrl: 'https://example.com/callback',
+            jqTransform: '.events |',
+            createdAt: '2026-05-24T00:00:00.000Z',
+          }),
+        },
+      );
+
+      await dispatchWebhook('dispatch-badjq-test', { ok: true }, {
+        FREEPIECES_TOKEN_STORE: kv,
+      } as never);
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('interpolateEnvRefs', () => {
+  const env = { FREEPIECES_API_TOKEN: 'abc123', PLAIN: 'raw' } as never;
+
+  it('replaces references with resolved env values', () => {
+    expect(interpolateEnvRefs('Bearer ${API_TOKEN}', env)).toBe('Bearer abc123');
+    expect(interpolateEnvRefs('${PLAIN}/x', env)).toBe('raw/x');
+  });
+
+  it('resolves unknown references to an empty string', () => {
+    expect(interpolateEnvRefs('a${MISSING}b', env)).toBe('ab');
+  });
+
+  it('returns the input unchanged when there are no references', () => {
+    expect(interpolateEnvRefs('no refs here', env)).toBe('no refs here');
+  });
+
+  it('resolves header maps via resolveHeaderInjections', () => {
+    expect(resolveHeaderInjections({ authorization: 'Bearer ${API_TOKEN}', x: 'y' }, env)).toEqual({
+      authorization: 'Bearer abc123',
+      x: 'y',
+    });
+    expect(resolveHeaderInjections(undefined, env)).toEqual({});
+  });
+});
+
+describe('isWebhookMethod', () => {
+  it('accepts whitelisted methods and rejects others', () => {
+    for (const m of WEBHOOK_METHODS) expect(isWebhookMethod(m)).toBe(true);
+    expect(isWebhookMethod('TRACE')).toBe(false);
+    expect(isWebhookMethod('post')).toBe(false);
+    expect(isWebhookMethod(undefined)).toBe(false);
   });
 });
