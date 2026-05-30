@@ -100,6 +100,14 @@ Run `fp --help` or `fp <command> --help` for full options.
 
 ---
 
+## GitHub Copilot agents
+
+This repository includes the Gem Team agent set in `.github/agents`, sourced from `mubaidr/gem-team` release `gem-team-v1.46.0`.
+
+Use them from GitHub Copilot Chat to access the Gem Team planner, researcher, implementer, reviewer, debugger, designer, devops, documentation, browser-testing, mobile, and simplifier agents directly in this repository.
+
+---
+
 ## Deploy to Cloudflare Workers
 
 ```bash
