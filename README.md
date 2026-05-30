@@ -184,6 +184,26 @@ Use `X-User-Id` for OAuth2 pieces such as Gmail. Use `X-Piece-Token` for a singl
 
 In local dev, if `RUN_API_KEY` is not set, the bearer token remains the fallback for both modes. The SDK and examples also send `X-User-Id` / `X-Piece-Token` when available so local and deployed behavior stay aligned.
 
+### Profiles (scoped tokens)
+
+Create **profiles** under **Settings → Profiles** in the admin panel. Each profile belongs to the
+signed-in user, carries its own scoped runtime token (prefixed `fp_pt_`), and has its own enabled
+set of piece actions and triggers. A runtime client (MCP, `/run`, `/trigger`) presents the profile
+token as the `Authorization` bearer and the worker resolves the owning identity and tool selection
+automatically — **no `X-User-Id` header required**:
+
+```bash
+curl -X POST "$WORKER/run/gmail/send_email" \
+  -H "Authorization: Bearer fp_pt_<profile-token>" \
+  -H "content-type: application/json" \
+  -d '{ "to": "you@example.com", "subject": "hi", "body": "from a profile" }'
+```
+
+Profile tokens are checked before the static-key/JWT modes and work even when `RUN_API_KEY` is set.
+Tokens are shown once and stored only as a SHA-256 hash; regenerating invalidates the previous token,
+and revoking leaves the profile (with its tool selection) intact. Tools disabled for a profile are
+hidden from MCP `tools/list` and return `404` from `/run` and `/trigger`.
+
 ### Bundled Cloudflare binding pieces
 
 `freepieces` includes native no-auth pieces for Worker-local Cloudflare bindings:

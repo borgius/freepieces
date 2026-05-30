@@ -140,7 +140,8 @@ async function enabledActionNames(
   credentials: RuntimeRequestCredentials,
   env: Env,
 ): Promise<Set<string> | undefined> {
-  if (!credentials.userId) {
+  const toolOwner = credentials.toolOwnerId ?? credentials.userId;
+  if (!toolOwner) {
     return undefined;
   }
 
@@ -154,7 +155,7 @@ async function enabledActionNames(
     return undefined;
   }
 
-  const toolState = await loadUserToolState(tokenStore, credentials.userId, pieceName);
+  const toolState = await loadUserToolState(tokenStore, toolOwner, pieceName);
   const actionNames = stored.kind === 'native'
     ? stored.def.actions.map((action) => action.name)
     : Object.values(stored.piece._actions).map((action) => action.name);

@@ -37,6 +37,17 @@ import {
   setActionEnabledForUser,
   setTriggerEnabledForUser,
 } from '../lib/user-tool-state';
+import {
+  createProfile,
+  deleteProfile,
+  getProfile,
+  listProfiles,
+  profileToolOwner,
+  regenerateProfileToken,
+  renameProfile,
+  revokeProfileToken,
+  type Profile,
+} from '../lib/profile-store';
 
 /** Allow HTTPS everywhere; allow HTTP only for loopback (local dev). */
 function isValidCallbackUrl(url: string): boolean {
@@ -231,6 +242,161 @@ adminApi.use('*', async (c, next) => {
 // GET /admin/api/me
 adminApi.get('/me', (c) => {
   return c.json({ userId: c.var.session.sub, email: c.var.session.email });
+});
+
+// ── Profiles ────────────────────────────────────────────────────────────
+//
+// A profile is owned by the authenticated admin user (session.sub). Each profile
+// has its own scoped runtime token (`fp_pt_*`) and its own enabled tool set per
+// piece. Runtime clients present the token instead of `Authorization` + `X-User-Id`.
+
+/** Public profile DTO — never exposes the token hash. */
+function toProfileDto(profile: Profile) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+    hasToken: profile.tokenHash !== null,
+  };
+}
+
+// GET /admin/api/profiles → list the current user's profiles
+adminApi.get('/profiles', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const profiles = await listProfiles(kv, c.var.session.sub);
+  return c.json({ profiles: profiles.map(toProfileDto) });
+});
+
+// POST /admin/api/profiles → create a profile { name }
+adminApi.post('/profiles', async (c) => {
+  let body: { name?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const name = body.name?.trim();
+  if (!name) return c.json({ error: 'name is required' }, 400);
+
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const profile = await createProfile(kv, c.var.session.sub, name);
+  return c.json({ profile: toProfileDto(profile) }, 201);
+});
+
+// PATCH /admin/api/profiles/:id → rename { name }
+adminApi.patch('/profiles/:id', async (c) => {
+  let body: { name?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const name = body.name?.trim();
+  if (!name) return c.json({ error: 'name is required' }, 400);
+
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const profile = await renameProfile(kv, c.var.session.sub, c.req.param('id'), name);
+  if (!profile) return c.json({ error: 'Profile not found' }, 404);
+  return c.json({ profile: toProfileDto(profile) });
+});
+
+// DELETE /admin/api/profiles/:id
+adminApi.delete('/profiles/:id', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const deleted = await deleteProfile(kv, c.var.session.sub, c.req.param('id'));
+  if (!deleted) return c.json({ error: 'Profile not found' }, 404);
+  return c.json({ ok: true });
+});
+
+// POST /admin/api/profiles/:id/token → (re)generate the scoped token (shown once)
+adminApi.post('/profiles/:id/token', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const issued = await regenerateProfileToken(kv, c.var.session.sub, c.req.param('id'));
+  if (!issued) return c.json({ error: 'Profile not found' }, 404);
+  return c.json({ token: issued.token, profile: toProfileDto(issued.profile) });
+});
+
+// DELETE /admin/api/profiles/:id/token → revoke the scoped token
+adminApi.delete('/profiles/:id/token', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const profile = await revokeProfileToken(kv, c.var.session.sub, c.req.param('id'));
+  if (!profile) return c.json({ error: 'Profile not found' }, 404);
+  return c.json({ profile: toProfileDto(profile) });
+});
+
+// GET /admin/api/profiles/:id/pieces → per-piece tool selection for the profile
+adminApi.get('/profiles/:id/pieces', async (c) => {
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const profile = await getProfile(kv, c.var.session.sub, c.req.param('id'));
+  if (!profile) return c.json({ error: 'Profile not found' }, 404);
+
+  const owner = profileToolOwner(profile.id);
+  const pieces = await Promise.all(
+    listPieces().map(async (p) => {
+      const toolState = await loadUserToolState(kv, owner, p.name);
+      return {
+        name: p.name,
+        displayName: p.displayName,
+        actions: p.actions.map((a) => ({
+          name: a.name,
+          displayName: a.displayName,
+          enabled: isActionEnabledInState(toolState, a.name),
+        })),
+        triggers: p.triggers.map((t) => ({
+          name: t.name,
+          displayName: t.displayName,
+          enabled: isTriggerEnabledInState(toolState, t.name),
+        })),
+      };
+    }),
+  );
+  return c.json({ pieces });
+});
+
+// PATCH /admin/api/profiles/:id/pieces/:piece/:kind/:name → toggle a tool for the profile
+adminApi.patch('/profiles/:id/pieces/:piece/:kind/:name', async (c) => {
+  const kind = c.req.param('kind');
+  if (kind !== 'action' && kind !== 'trigger') {
+    return c.json({ error: 'kind must be "action" or "trigger"' }, 400);
+  }
+
+  const pieceName = c.req.param('piece');
+  const itemName = c.req.param('name');
+  const stored = getPiece(pieceName);
+  if (!stored) return c.json({ error: 'Piece not found' }, 404);
+
+  const itemExists = kind === 'action'
+    ? (stored.kind === 'native'
+      ? stored.def.actions.some((action) => action.name === itemName)
+      : Boolean(stored.piece._actions[itemName]))
+    : Boolean(getTrigger(pieceName, itemName));
+  if (!itemExists) {
+    return c.json({ error: `${kind === 'action' ? 'Action' : 'Trigger'} not found` }, 404);
+  }
+
+  let body: { enabled?: boolean };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  if (typeof body.enabled !== 'boolean') {
+    return c.json({ error: 'enabled must be a boolean' }, 400);
+  }
+
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const profile = await getProfile(kv, c.var.session.sub, c.req.param('id'));
+  if (!profile) return c.json({ error: 'Profile not found' }, 404);
+
+  const owner = profileToolOwner(profile.id);
+  if (kind === 'action') {
+    await setActionEnabledForUser(kv, owner, pieceName, itemName, body.enabled);
+  } else {
+    await setTriggerEnabledForUser(kv, owner, pieceName, itemName, body.enabled);
+  }
+
+  return c.json({ ok: true, profileId: profile.id, pieceName, kind, name: itemName, enabled: body.enabled });
 });
 
 // GET /admin/api/login-url — returns the OpenAuth authorization URL

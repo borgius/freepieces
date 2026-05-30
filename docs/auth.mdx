@@ -390,6 +390,36 @@ This is the most important rule in the whole auth system:
 
 That is why deployed requests often need more than one auth header.
 
+### Profile tokens: scoped per-user identities
+
+A **profile** is a named identity owned by an admin user. Each profile has its own
+scoped runtime token (prefixed `fp_pt_`) and its own enabled set of piece actions and
+triggers. Profiles are created and managed from **Settings → Profiles** in the admin panel.
+
+When a runtime client presents a profile token, the worker resolves the owning user
+identity and the profile's tool selection automatically — there is **no** `X-User-Id`
+header to send:
+
+```http
+Authorization: Bearer fp_pt_<profile-token>
+```
+
+Meaning:
+
+- the token both authenticates the caller and selects the owning `userId` (used for
+  stored OAuth token lookups)
+- the profile's per-piece tool selection decides which actions/triggers are visible and
+  runnable (disabled tools return `404`, and are hidden from MCP `tools/list`)
+- `X-Piece-Token` / `X-Piece-Auth` may still be supplied to override provider credentials
+- a profile token is honoured before the static API key and JWT modes, and works even when
+  `FREEPIECES_RUN_API_KEY` is set or `FREEPIECES_DISABLE_AUTH` is enabled
+- an unknown or revoked profile token is rejected with `401` (it never falls back to
+  treating the value as a user id)
+
+Tokens are shown exactly once, at generation time, and are stored only as a SHA-256 hash.
+Regenerating a token immediately invalidates the previous one; revoking a token leaves the
+profile (and its tool selection) intact.
+
 ### Local-dev mode: `FREEPIECES_RUN_API_KEY` is not configured
 
 When `FREEPIECES_RUN_API_KEY` (and its aliases) is absent, the worker keeps a compatibility fallback:
@@ -425,6 +455,7 @@ In this mode the worker accepts any request on the runtime routes without an `Au
 
 | Mode | `Authorization` value | `X-User-Id` | `X-Piece-Token` | `X-Piece-Auth` | Typical use |
 | --- | --- | --- | --- | --- | --- |
+| profile token | `fp_pt_<profile-token>` | not used (resolved from profile) | optional override | optional override | per-user scoped clients |
 | deployed secured worker | `RUN_API_KEY` | optional but common | optional: single-prop credential | optional: multi-prop CUSTOM_AUTH credentials | production |
 | local dev without `RUN_API_KEY` | user ID or raw token fallback | optional override | optional override | optional override | fast local testing |
 | local dev with `DISABLE_AUTH` | not required | optional | optional | optional | zero-config local dev |

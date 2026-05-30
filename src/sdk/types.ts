@@ -20,6 +20,10 @@ export interface FreePiecesClientOptions {
    *
    * When absent (local dev without RUN_API_KEY), the userId is sent as
    * the bearer token directly (backward-compatible behaviour).
+   *
+   * May also be a **scoped profile token** (prefixed `fp_pt_`) created under
+   * Settings → Profiles. A profile token resolves the owning identity and the
+   * profile's enabled tool set on its own, so `userId` is not required.
    */
   token?: string;
   /**

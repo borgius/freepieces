@@ -1,5 +1,6 @@
 import { Box, Flex, Text, VStack } from '@chakra-ui/react';
-import { KeyRound, TestTube2, Webhook } from 'lucide-react';
+import { KeyRound, TestTube2, UserCog, Webhook } from 'lucide-react';
+import { ProfilesPanel } from '../components/ProfilesPanel';
 import { SecretsPanel } from '../components/SecretsPanel';
 import { TestEventsPanel } from '../components/TestEventsPanel';
 import { TriggersPanel } from '../components/TriggersPanel';
@@ -7,6 +8,7 @@ import type { Section } from '../lib/adminUrl';
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'secrets', label: 'Secrets', icon: <KeyRound size={14} /> },
+  { id: 'profiles', label: 'Profiles', icon: <UserCog size={14} /> },
   { id: 'triggers', label: 'Triggers', icon: <Webhook size={14} /> },
   { id: 'test-events', label: 'Test Webhooks', icon: <TestTube2 size={14} /> },
 ];
@@ -67,6 +69,7 @@ export function SettingsPage({ section, triggerId, onSectionChange, onTriggerIdC
       {/* Content — widened to 5xl to accommodate grouped endpoint rows */}
       <Box flex={1} p={8} maxW="5xl">
         {activeSection === 'secrets' && <SecretsPanel />}
+        {activeSection === 'profiles' && <ProfilesPanel />}
         {activeSection === 'triggers' && <TriggersPanel expandedKey={triggerId} onExpandedChange={onTriggerIdChange} />}
         {activeSection === 'test-events' && <TestEventsPanel />}
       </Box>

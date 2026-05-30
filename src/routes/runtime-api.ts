@@ -32,7 +32,7 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
     return c.json({ error: 'Action not found' }, 404);
   }
 
-  const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
+  const { userId, pieceToken, pieceAuthProps, toolOwnerId } = c.var.credentials;
   const actionExists = stored.kind === 'native'
     ? stored.def.actions.some((action) => action.name === actionName)
     : Boolean(stored.piece._actions[actionName]);
@@ -42,7 +42,7 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
   }
 
   const tokenStore = getKVBinding(c.env, 'TOKEN_STORE');
-  if (tokenStore && !(await isActionEnabledForUser(tokenStore, userId, pieceName, actionName))) {
+  if (tokenStore && !(await isActionEnabledForUser(tokenStore, toolOwnerId ?? userId, pieceName, actionName))) {
     return c.json({ error: 'Action not found' }, 404);
   }
 
@@ -119,10 +119,10 @@ runtimeApi.post('/trigger/:piece/:trigger', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
+  const { userId, pieceToken, pieceAuthProps, toolOwnerId } = c.var.credentials;
 
   const tokenStore = getKVBinding(c.env, 'TOKEN_STORE');
-  if (tokenStore && !(await isTriggerEnabledForUser(tokenStore, userId, pieceName, triggerName))) {
+  if (tokenStore && !(await isTriggerEnabledForUser(tokenStore, toolOwnerId ?? userId, pieceName, triggerName))) {
     return c.json({ error: 'Trigger not found' }, 404);
   }
 

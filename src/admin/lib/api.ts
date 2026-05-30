@@ -165,6 +165,87 @@ export async function getSecrets(): Promise<SecretsResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------------------
+
+export interface Profile {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  hasToken: boolean;
+}
+
+export interface ProfileToolItem {
+  name: string;
+  displayName: string;
+  enabled: boolean;
+}
+
+export interface ProfilePieceTools {
+  name: string;
+  displayName: string;
+  actions: ProfileToolItem[];
+  triggers: ProfileToolItem[];
+}
+
+export async function listProfiles(): Promise<Profile[]> {
+  const res = await apiFetch<{ profiles: Profile[] }>('/admin/api/profiles');
+  return res.profiles;
+}
+
+export async function createProfile(name: string): Promise<Profile> {
+  const res = await apiFetch<{ profile: Profile }>('/admin/api/profiles', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+  return res.profile;
+}
+
+export async function renameProfile(id: string, name: string): Promise<Profile> {
+  const res = await apiFetch<{ profile: Profile }>(`/admin/api/profiles/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+  return res.profile;
+}
+
+export async function deleteProfile(id: string): Promise<void> {
+  await apiFetch(`/admin/api/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function regenerateProfileToken(id: string): Promise<{ token: string; profile: Profile }> {
+  return apiFetch(`/admin/api/profiles/${encodeURIComponent(id)}/token`, { method: 'POST' });
+}
+
+export async function revokeProfileToken(id: string): Promise<Profile> {
+  const res = await apiFetch<{ profile: Profile }>(`/admin/api/profiles/${encodeURIComponent(id)}/token`, {
+    method: 'DELETE',
+  });
+  return res.profile;
+}
+
+export async function getProfilePieces(id: string): Promise<ProfilePieceTools[]> {
+  const res = await apiFetch<{ pieces: ProfilePieceTools[] }>(
+    `/admin/api/profiles/${encodeURIComponent(id)}/pieces`,
+  );
+  return res.pieces;
+}
+
+export async function setProfileToolEnabled(
+  id: string,
+  pieceName: string,
+  kind: 'action' | 'trigger',
+  name: string,
+  enabled: boolean,
+): Promise<void> {
+  await apiFetch(
+    `/admin/api/profiles/${encodeURIComponent(id)}/pieces/${encodeURIComponent(pieceName)}/${kind}/${encodeURIComponent(name)}`,
+    { method: 'PATCH', body: JSON.stringify({ enabled }) },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Trigger groups
 // ---------------------------------------------------------------------------
 

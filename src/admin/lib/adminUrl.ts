@@ -1,8 +1,8 @@
 export type Tab = 'pieces' | 'add-piece' | 'docs' | 'settings';
-export type Section = 'secrets' | 'triggers' | 'test-events';
+export type Section = 'secrets' | 'profiles' | 'triggers' | 'test-events';
 
 const VALID_TABS: Tab[] = ['pieces', 'add-piece', 'docs', 'settings'];
-const VALID_SECTIONS: Section[] = ['secrets', 'triggers', 'test-events'];
+const VALID_SECTIONS: Section[] = ['secrets', 'profiles', 'triggers', 'test-events'];
 
 export interface AdminNav {
   tab: Tab;
