@@ -416,14 +416,34 @@ function UsersSection({ pieceName, isOAuth2, hasAutoUserId }: { pieceName: strin
 }
 
 interface Props {
+  currentUserId: string;
   piece: PieceInfo;
   onToggle: (updated: PieceInfo) => void;
 }
 
-export function PieceCard({ piece, onToggle }: Props) {
+export function PieceCard({ currentUserId, piece, onToggle }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const authTypes = getAuthTypes(piece.auth);
+
+  function handleItemEnabledChange(kind: 'action' | 'trigger', itemName: string, enabled: boolean) {
+    if (kind === 'action') {
+      onToggle({
+        ...piece,
+        actions: piece.actions.map((action) => (
+          action.name === itemName ? { ...action, enabled } : action
+        )),
+      });
+      return;
+    }
+
+    onToggle({
+      ...piece,
+      triggers: piece.triggers.map((trigger) => (
+        trigger.name === itemName ? { ...trigger, enabled } : trigger
+      )),
+    });
+  }
 
   async function handleToggle() {
     setError('');
@@ -495,10 +515,12 @@ export function PieceCard({ piece, onToggle }: Props) {
             title="Actions"
             count={piece.actions.length}
             accentColor="blue.400"
+            currentUserId={currentUserId}
             icon={Zap}
             pieceName={piece.name}
             items={piece.actions}
             kind="action"
+            onItemEnabledChange={handleItemEnabledChange}
             pieceAuth={piece.auth}
             pieceSupportsUsers={piece.supportsUsers}
           />
@@ -509,12 +531,14 @@ export function PieceCard({ piece, onToggle }: Props) {
             title="Triggers"
             count={piece.triggers.length}
             accentColor="purple.400"
+            currentUserId={currentUserId}
             icon={Webhook}
             pieceName={piece.name}
             badgeKey="type"
             badgePalette="purple"
             items={piece.triggers}
             kind="trigger"
+            onItemEnabledChange={handleItemEnabledChange}
           />
         )}
 

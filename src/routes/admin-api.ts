@@ -28,6 +28,15 @@ import type { Env } from '../framework/types';
 import { requireEnvStr, requireKVBinding, getEnvBool } from '../lib/env';
 import { listAllSubscriptions, SUB_KEY, resolveQueueBinding } from '../lib/webhook';
 import type { WebhookSubscription } from '../lib/webhook';
+import {
+  isActionEnabledForUser,
+  isActionEnabledInState,
+  isTriggerEnabledForUser,
+  isTriggerEnabledInState,
+  loadUserToolState,
+  setActionEnabledForUser,
+  setTriggerEnabledForUser,
+} from '../lib/user-tool-state';
 
 /** Allow HTTPS everywhere; allow HTTP only for loopback (local dev). */
 function isValidCallbackUrl(url: string): boolean {
@@ -221,7 +230,7 @@ adminApi.use('*', async (c, next) => {
 
 // GET /admin/api/me
 adminApi.get('/me', (c) => {
-  return c.json({ email: c.var.session.email });
+  return c.json({ userId: c.var.session.sub, email: c.var.session.email });
 });
 
 // GET /admin/api/login-url — returns the OpenAuth authorization URL
@@ -243,42 +252,53 @@ adminApi.get('/pieces', async (c) => {
   const all = listPieces();
   const envRecord = c.env as Record<string, unknown>;
   const workerName = resolveWorkerName(c.env);
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  const currentUserId = c.var.session.sub;
   const result = await Promise.all(
-    all.map(async (p) => ({
-      name: p.name,
-      displayName: p.displayName,
-      description: p.description ?? null,
-      version: p.version,
-      auth: p.auth,
-      mcpEndpoint: p.mcpEndpoint,
-      actions: p.actions.map((a) => ({
-        name: a.name,
-        displayName: a.displayName,
-        description: a.description ?? null,
-        props: a.props ?? null,
-      })),
-      triggers: p.triggers.map((t) => ({
-        name: t.name,
-        displayName: t.displayName,
-        description: t.description ?? null,
-        type: t.type,
-        props: t.props ?? null,
-      })),
-      secrets: [
-          ...p.secrets,
-          ...(PIECE_EXTRA_SECRET_GROUPS[p.name] ?? []),
-        ]
-        .map((group) => ({
-          ...group,
-          secrets: group.secrets
-            .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
-            .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]), command: withWorkerName(s.command, workerName) })),
-        }))
-        .filter((group) => group.secrets.length > 0),
-      supportsUsers: pieceSupportsStoredUsers(p.auth),
-      hasAutoUserId: pieceHasAutoUserId(p.auth),
-      enabled: await isPieceEnabled(requireKVBinding(c.env, 'TOKEN_STORE'), p.name),
-    })),
+    all.map(async (p) => {
+      const [pieceEnabled, toolState] = await Promise.all([
+        isPieceEnabled(kv, p.name),
+        loadUserToolState(kv, currentUserId, p.name),
+      ]);
+
+      return {
+        name: p.name,
+        displayName: p.displayName,
+        description: p.description ?? null,
+        version: p.version,
+        auth: p.auth,
+        mcpEndpoint: p.mcpEndpoint,
+        actions: p.actions.map((a) => ({
+          name: a.name,
+          displayName: a.displayName,
+          description: a.description ?? null,
+          props: a.props ?? null,
+          enabled: isActionEnabledInState(toolState, a.name),
+        })),
+        triggers: p.triggers.map((t) => ({
+          name: t.name,
+          displayName: t.displayName,
+          description: t.description ?? null,
+          type: t.type,
+          props: t.props ?? null,
+          enabled: isTriggerEnabledInState(toolState, t.name),
+        })),
+        secrets: [
+            ...p.secrets,
+            ...(PIECE_EXTRA_SECRET_GROUPS[p.name] ?? []),
+          ]
+          .map((group) => ({
+            ...group,
+            secrets: group.secrets
+              .filter((s) => !GLOBAL_SECRET_KEY_SET.has(s.key))
+              .map((s) => ({ ...s, isSet: Boolean(envRecord[s.key]), command: withWorkerName(s.command, workerName) })),
+          }))
+          .filter((group) => group.secrets.length > 0),
+        supportsUsers: pieceSupportsStoredUsers(p.auth),
+        hasAutoUserId: pieceHasAutoUserId(p.auth),
+        enabled: pieceEnabled,
+      };
+    }),
   );
   return c.json(result);
 });
@@ -381,6 +401,61 @@ adminApi.delete('/pieces/:name', async (c) => {
   return c.json({ ok: true, name, enabled: false });
 });
 
+// PATCH /admin/api/pieces/:piece/:kind/:name → toggle action/trigger state
+adminApi.patch('/pieces/:piece/:kind/:name', async (c) => {
+  const pieceName = c.req.param('piece');
+  const kind = c.req.param('kind');
+  const itemName = c.req.param('name');
+  const stored = getPiece(pieceName);
+
+  if (!stored) {
+    return c.json({ error: 'Piece not found' }, 404);
+  }
+
+  if (kind !== 'action' && kind !== 'trigger') {
+    return c.json({ error: 'kind must be "action" or "trigger"' }, 400);
+  }
+
+  const itemExists = kind === 'action'
+    ? (stored.kind === 'native'
+      ? stored.def.actions.some((action) => action.name === itemName)
+      : Boolean(stored.piece._actions[itemName]))
+    : Boolean(getTrigger(pieceName, itemName));
+
+  if (!itemExists) {
+    return c.json({ error: `${kind === 'action' ? 'Action' : 'Trigger'} not found` }, 404);
+  }
+
+  let body: { enabled?: boolean; userId?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  if (typeof body.enabled !== 'boolean') {
+    return c.json({ error: 'enabled must be a boolean' }, 400);
+  }
+
+  const effectiveUserId = body.userId?.trim() || c.var.session.sub;
+  const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+
+  if (kind === 'action') {
+    await setActionEnabledForUser(kv, effectiveUserId, pieceName, itemName, body.enabled);
+  } else {
+    await setTriggerEnabledForUser(kv, effectiveUserId, pieceName, itemName, body.enabled);
+  }
+
+  return c.json({
+    ok: true,
+    pieceName,
+    kind,
+    name: itemName,
+    enabled: body.enabled,
+    userId: effectiveUserId,
+  });
+});
+
 // POST /admin/api/subscriptions/:piece/:trigger — admin-privileged subscription creation
 adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
   const pieceName = c.req.param('piece');
@@ -393,6 +468,7 @@ adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
   try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
 
   const { callbackUrl, queueName, pieceToken, userId, propsValue = {} } = body;
+  const effectiveUserId = userId?.trim() || c.var.session.sub;
 
   if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
   if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
@@ -406,13 +482,17 @@ adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
   }
 
   const kv = requireKVBinding(c.env, 'TOKEN_STORE');
+  if (!(await isTriggerEnabledForUser(kv, effectiveUserId, pieceName, triggerName))) {
+    return c.json({ error: 'Trigger not found' }, 404);
+  }
+
   const subId = crypto.randomUUID();
   const sub: WebhookSubscription = {
     id: subId,
     trigger: triggerName,
     propsValue,
     ...(callbackUrl ? { callbackUrl } : { queueName }),
-    ...(userId ? { userId } : {}),
+    ...(effectiveUserId ? { userId: effectiveUserId } : {}),
     ...(pieceToken ? { pieceToken } : {}),
     createdAt: new Date().toISOString(),
   };
@@ -588,6 +668,11 @@ adminApi.post('/run/:piece/:action', async (c) => {
   try { body = await c.req.json(); } catch { /* empty body is fine */ }
 
   const { userId, pieceToken, props = {} } = body;
+  const effectiveUserId = userId?.trim() || c.var.session.sub;
+
+  if (!(await isActionEnabledForUser(requireKVBinding(c.env, 'TOKEN_STORE'), effectiveUserId, pieceName, actionName))) {
+    return c.json({ error: 'Action not found' }, 404);
+  }
 
   try {
     let result: unknown;

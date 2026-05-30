@@ -11,6 +11,8 @@ import { buildApContext, buildApTriggerContext, buildNativeTriggerContext } from
 import { resolveNativeRuntimeAuth, resolveApRuntimeAuth, forceRefreshNativeAuth } from '../lib/auth-resolve';
 import type { Env } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
+import { getKVBinding } from '../lib/env';
+import { isActionEnabledForUser, isTriggerEnabledForUser } from '../lib/user-tool-state';
 
 const runtimeApi = new Hono<{
   Bindings: Env;
@@ -31,6 +33,18 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
   }
 
   const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
+  const actionExists = stored.kind === 'native'
+    ? stored.def.actions.some((action) => action.name === actionName)
+    : Boolean(stored.piece._actions[actionName]);
+
+  if (!actionExists) {
+    return c.json({ error: 'Action not found' }, 404);
+  }
+
+  const tokenStore = getKVBinding(c.env, 'TOKEN_STORE');
+  if (tokenStore && !(await isActionEnabledForUser(tokenStore, userId, pieceName, actionName))) {
+    return c.json({ error: 'Action not found' }, 404);
+  }
 
   let auth: Record<string, string> | undefined;
 
@@ -50,9 +64,7 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
     if (stored.kind === 'native') {
       const piece = stored.def;
       const action = piece.actions.find((a) => a.name === actionName);
-      if (!action) {
-        return c.json({ error: 'Action not found' }, 404);
-      }
+      if (!action) return c.json({ error: 'Action not found' }, 404);
 
       auth = await resolveNativeRuntimeAuth(pieceName, piece.auth, c.env, userId, pieceToken);
       if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
@@ -73,9 +85,7 @@ runtimeApi.all('/run/:piece/:action', async (c) => {
     } else {
       const { piece } = stored;
       const action = piece._actions[actionName];
-      if (!action) {
-        return c.json({ error: 'Action not found' }, 404);
-      }
+      if (!action) return c.json({ error: 'Action not found' }, 404);
 
       auth = await resolveApRuntimeAuth(pieceName, piece, c.env, userId, pieceToken);
       if (pieceAuthProps) auth = { ...auth, ...pieceAuthProps };
@@ -110,6 +120,11 @@ runtimeApi.post('/trigger/:piece/:trigger', async (c) => {
   }
 
   const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
+
+  const tokenStore = getKVBinding(c.env, 'TOKEN_STORE');
+  if (tokenStore && !(await isTriggerEnabledForUser(tokenStore, userId, pieceName, triggerName))) {
+    return c.json({ error: 'Trigger not found' }, 404);
+  }
 
   try {
     if (stored.kind === 'native') {

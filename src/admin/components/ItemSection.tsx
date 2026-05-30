@@ -20,7 +20,7 @@ import {
 } from '@chakra-ui/react';
 import { ChevronDown, ChevronRight, Copy, Link2, ScanSearch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { PieceAction, PieceTrigger, PropDef, PieceAuth } from '../lib/api';
+import { setPieceItemEnabled, type PieceAction, type PieceTrigger, type PropDef, type PieceAuth } from '../lib/api';
 
 import { ActionUsageTab, baseUrl, ItemMcpTab, PropTable, TriggerUsageTab } from './ItemUsage';
 import { ActionTryItTab } from './ItemTryIt';
@@ -30,12 +30,14 @@ import { ActionTryItTab } from './ItemTryIt';
 // --------------------------------------------------------------------------
 
 interface ItemRowProps {
+  currentUserId: string;
   pieceName: string;
   name: string;
   displayName: string;
   description: string | null;
   props: Record<string, PropDef> | null;
   accentColor: string;
+  enabled: boolean;
   badge?: string;
   badgePalette?: string;
   kind: 'action' | 'trigger';
@@ -43,78 +45,141 @@ interface ItemRowProps {
   triggerType?: string;
   pieceAuth?: PieceAuth;
   pieceSupportsUsers?: boolean;
+  onEnabledChange: (enabled: boolean) => void;
 }
 
 function ItemRow({
+  currentUserId,
   pieceName,
   name,
   displayName,
   description,
   props,
   accentColor,
+  enabled,
   badge,
   badgePalette = 'gray',
   kind,
   triggerType,
   pieceAuth,
   pieceSupportsUsers,
+  onEnabledChange,
 }: ItemRowProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [toggleLoading, setToggleLoading] = useState(false);
+  const [toggleError, setToggleError] = useState('');
   const hasParams = props && Object.keys(props).length > 0;
   const paramCount = hasParams ? Object.keys(props).length : 0;
+  const indicatorColor = enabled ? accentColor : 'gray.300';
+
+  async function handleEnabledToggle(nextEnabled: boolean) {
+    setToggleLoading(true);
+    setToggleError('');
+
+    try {
+      await setPieceItemEnabled(pieceName, kind, name, nextEnabled, currentUserId || undefined);
+      onEnabledChange(nextEnabled);
+    } catch (err) {
+      setToggleError(err instanceof Error ? err.message : `Failed to update ${kind}`);
+    } finally {
+      setToggleLoading(false);
+    }
+  }
 
   return (
     <>
-      <Flex
-        as="button"
-        w="full"
-        align="center"
-        gap={2}
-        px={3}
-        py={2}
+      <Box
         bg="white"
         borderWidth="1px"
         borderColor="gray.100"
         rounded="md"
-        cursor="pointer"
         _hover={{ bg: 'gray.50', borderColor: 'gray.200' }}
-        onClick={() => setDialogOpen(true)}
-        textAlign="left"
       >
-        {/* Dot */}
-        <Box w={1.5} h={1.5} bg={accentColor} rounded="full" flexShrink={0} />
+        <Flex align="center" gap={2} px={3} py={2}>
+          <Flex
+            as="button"
+            flex={1}
+            minW={0}
+            align="center"
+            gap={2}
+            textAlign="left"
+            onClick={() => setDialogOpen(true)}
+          >
+            <Box w={1.5} h={1.5} bg={indicatorColor} rounded="full" flexShrink={0} />
 
-        {/* Labels */}
-        <Box flex={1} minW={0}>
-          <HStack gap={2} flexWrap="wrap">
-            <Text fontSize="xs" fontWeight="medium" color="gray.800">
-              {displayName}
-            </Text>
-            <Text fontSize="xs" color="gray.400" fontFamily="mono">
-              {name}
-            </Text>
-            {badge && (
-              <Badge colorPalette={badgePalette} variant="outline" fontSize="2xs">
-                {badge}
-              </Badge>
-            )}
-            {hasParams && (
-              <Badge colorPalette="gray" variant="subtle" fontSize="2xs">
-                {paramCount} params
-              </Badge>
-            )}
+            <Box flex={1} minW={0}>
+              <HStack gap={2} flexWrap="wrap">
+                <Text fontSize="xs" fontWeight="medium" color="gray.800">
+                  {displayName}
+                </Text>
+                <Text fontSize="xs" color="gray.400" fontFamily="mono">
+                  {name}
+                </Text>
+                {!enabled && (
+                  <Badge colorPalette="gray" variant="subtle" fontSize="2xs">
+                    Disabled
+                  </Badge>
+                )}
+                {badge && (
+                  <Badge colorPalette={badgePalette} variant="outline" fontSize="2xs">
+                    {badge}
+                  </Badge>
+                )}
+                {hasParams && (
+                  <Badge colorPalette="gray" variant="subtle" fontSize="2xs">
+                    {paramCount} params
+                  </Badge>
+                )}
+              </HStack>
+              {description && (
+                <Text fontSize="xs" color="gray.500" mt={0.5} lineClamp={1}>
+                  {description}
+                </Text>
+              )}
+            </Box>
+          </Flex>
+
+          <HStack gap={2} flexShrink={0}>
+            <Box
+              as="button"
+              color="gray.300"
+              _hover={{ color: 'gray.500' }}
+              onClick={() => setDialogOpen(true)}
+              aria-label={`Open ${kind} details for ${displayName}`}
+              title="Open details"
+            >
+              <ScanSearch size={13} />
+            </Box>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: toggleLoading ? 'wait' : 'pointer',
+                opacity: toggleLoading ? 0.7 : 1,
+              }}
+              title={enabled ? `Disable ${displayName}` : `Enable ${displayName}`}
+            >
+              <input
+                aria-label={`Enable ${kind} ${displayName}`}
+                checked={enabled}
+                disabled={toggleLoading}
+                type="checkbox"
+                onChange={(event) => void handleEnabledToggle(event.target.checked)}
+              />
+              <Text fontSize="2xs" color="gray.500">
+                On
+              </Text>
+            </label>
           </HStack>
-          {description && (
-            <Text fontSize="xs" color="gray.500" mt={0.5} lineClamp={1}>
-              {description}
-            </Text>
-          )}
-        </Box>
+        </Flex>
 
-        <Box color="gray.300" flexShrink={0}>
-          <ScanSearch size={13} />
-        </Box>
-      </Flex>
+        {toggleError && (
+          <Text color="red.500" fontSize="2xs" px={3} pb={2}>
+            {toggleError}
+          </Text>
+        )}
+      </Box>
 
       <DialogRoot
         open={dialogOpen}
@@ -141,7 +206,9 @@ function ItemRow({
                 <Tabs.List borderBottomWidth="1px" borderColor="gray.100" mb={3}>
                   <Tabs.Trigger value="params">Params {hasParams ? `(${paramCount})` : ''}</Tabs.Trigger>
                   <Tabs.Trigger value="usage">Usage</Tabs.Trigger>
-                  <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
+                  {kind === 'action' && (
+                    <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
+                  )}
                   {kind === 'action' && (
                     <Tabs.Trigger value="tryit">Try it</Tabs.Trigger>
                   )}
@@ -158,9 +225,11 @@ function ItemRow({
                     : <ActionUsageTab pieceName={pieceName} actionName={name} props={props} />
                   }
                 </Tabs.Content>
-                <Tabs.Content value="mcp">
-                  <ItemMcpTab pieceName={pieceName} />
-                </Tabs.Content>
+                {kind === 'action' && (
+                  <Tabs.Content value="mcp">
+                    <ItemMcpTab pieceName={pieceName} />
+                  </Tabs.Content>
+                )}
                 {kind === 'action' && (
                   <Tabs.Content value="tryit">
                     <ActionTryItTab
@@ -189,12 +258,14 @@ interface SectionProps {
   title: string;
   count: number;
   accentColor: string;
+  currentUserId: string;
   icon?: LucideIcon;
   pieceName: string;
   badgeKey?: string;
   badgePalette?: string;
   items: Array<PieceAction | PieceTrigger>;
   kind: 'action' | 'trigger';
+  onItemEnabledChange: (kind: 'action' | 'trigger', itemName: string, enabled: boolean) => void;
   pieceAuth?: PieceAuth;
   pieceSupportsUsers?: boolean;
 }
@@ -203,12 +274,14 @@ function CollapsibleSection({
   title,
   count,
   accentColor,
+  currentUserId,
   icon: Icon,
   pieceName,
   badgeKey,
   badgePalette,
   items,
   kind,
+  onItemEnabledChange,
   pieceAuth,
   pieceSupportsUsers,
 }: SectionProps) {
@@ -289,15 +362,18 @@ function CollapsibleSection({
           {items.map((item) => (
             <ItemRow
               key={item.name}
+              currentUserId={currentUserId}
               pieceName={pieceName}
               name={item.name}
               displayName={item.displayName}
               description={item.description}
               props={item.props}
               accentColor={accentColor}
+              enabled={item.enabled}
               badge={badgeKey ? String((item as unknown as Record<string, unknown>)[badgeKey] ?? '') : undefined}
               badgePalette={badgePalette}
               kind={kind}
+              onEnabledChange={(enabled) => onItemEnabledChange(kind, item.name, enabled)}
               triggerType={kind === 'trigger' ? (item as PieceTrigger).type : undefined}
               pieceAuth={pieceAuth}
               pieceSupportsUsers={pieceSupportsUsers}

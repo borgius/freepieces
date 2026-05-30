@@ -55,6 +55,7 @@ function mcpCurlSnippet(piece: PieceInfo): string {
 export function McpSection({ piece }: { piece: PieceInfo }) {
   const [open, setOpen] = useState(false);
   const endpoint = mcpEndpoint(piece);
+  const enabledToolCount = piece.actions.filter((action) => action.enabled).length;
 
   return (
     <Box mt={3}>
@@ -80,7 +81,7 @@ export function McpSection({ piece }: { piece: PieceInfo }) {
           MCP
         </Text>
         <Badge colorPalette="blue" variant="subtle" fontSize="2xs" ml={1}>
-          {piece.actions.length} tools
+          {enabledToolCount} tools
         </Badge>
       </Flex>
 
@@ -107,7 +108,7 @@ export function McpSection({ piece }: { piece: PieceInfo }) {
               </ClipboardRoot>
             </HStack>
             <Text fontSize="xs" color="gray.500" mt={1}>
-              Use the same runtime token and piece credential headers as action, trigger, and subscription calls.
+              Use the same runtime token and piece credential headers as action, trigger, and subscription calls. Only enabled actions for the current user are listed as tools.
             </Text>
           </Box>
           <CodeBlock label="MCP client config" code={mcpConfigSnippet(piece)} />

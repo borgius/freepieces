@@ -14,6 +14,8 @@ import { resolveApRuntimeAuth, resolveNativeRuntimeAuth, forceRefreshNativeAuth 
 import { runtimeAuth } from '../lib/runtime-auth-middleware';
 import type { ApPiece, Env, PieceDefinition, PropDefinition } from '../framework/types';
 import type { RuntimeRequestCredentials } from '../lib/request-auth';
+import { getKVBinding } from '../lib/env';
+import { isActionEnabledInState, loadUserToolState } from '../lib/user-tool-state';
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -103,22 +105,61 @@ function propsToInputSchema(props: Record<string, PropDefinition> | undefined): 
   };
 }
 
-function nativeTools(piece: PieceDefinition): McpTool[] {
-  return piece.actions.map((action) => ({
-    name: action.name,
-    title: action.displayName,
-    description: action.description ?? `${action.displayName}.`,
-    inputSchema: propsToInputSchema(action.props),
-  }));
+function nativeTools(piece: PieceDefinition, enabledActions?: Set<string>): McpTool[] {
+  return piece.actions
+    .filter((action) => !enabledActions || enabledActions.has(action.name))
+    .map((action) => ({
+      name: action.name,
+      title: action.displayName,
+      description: action.description ?? `${action.displayName}.`,
+      inputSchema: propsToInputSchema(action.props),
+    }));
 }
 
-function apTools(piece: ApPiece): McpTool[] {
-  return Object.values(piece._actions).map((action) => ({
-    name: action.name,
-    title: action.displayName,
-    description: action.description ?? `${action.displayName}.`,
-    inputSchema: propsToInputSchema(extractApProps(action.props)),
-  }));
+function apTools(piece: ApPiece, enabledActions?: Set<string>): McpTool[] {
+  return Object.values(piece._actions)
+    .filter((action) => !enabledActions || enabledActions.has(action.name))
+    .map((action) => ({
+      name: action.name,
+      title: action.displayName,
+      description: action.description ?? `${action.displayName}.`,
+      inputSchema: propsToInputSchema(extractApProps(action.props)),
+    }));
+}
+
+function hasAction(stored: NonNullable<ReturnType<typeof getPiece>>, actionName: string): boolean {
+  if (stored.kind === 'native') {
+    return stored.def.actions.some((action) => action.name === actionName);
+  }
+
+  return Boolean(stored.piece._actions[actionName]);
+}
+
+async function enabledActionNames(
+  pieceName: string,
+  credentials: RuntimeRequestCredentials,
+  env: Env,
+): Promise<Set<string> | undefined> {
+  if (!credentials.userId) {
+    return undefined;
+  }
+
+  const stored = getPiece(pieceName);
+  if (!stored) {
+    return undefined;
+  }
+
+  const tokenStore = getKVBinding(env, 'TOKEN_STORE');
+  if (!tokenStore) {
+    return undefined;
+  }
+
+  const toolState = await loadUserToolState(tokenStore, credentials.userId, pieceName);
+  const actionNames = stored.kind === 'native'
+    ? stored.def.actions.map((action) => action.name)
+    : Object.values(stored.piece._actions).map((action) => action.name);
+
+  return new Set(actionNames.filter((actionName) => isActionEnabledInState(toolState, actionName)));
 }
 
 function extractApProps(raw: Record<string, unknown> | undefined): Record<string, PropDefinition> | undefined {
@@ -199,6 +240,8 @@ async function handleRpc(pieceName: string, env: Env, credentials: RuntimeReques
   const stored = getPiece(pieceName);
   if (!stored) return failure(request.id, -32602, 'Piece not found');
 
+  const actionsForUser = await enabledActionNames(pieceName, credentials, env);
+
   switch (request.method) {
     case 'initialize':
       return success(request.id, {
@@ -215,12 +258,15 @@ async function handleRpc(pieceName: string, env: Env, credentials: RuntimeReques
 
     case 'tools/list':
       return success(request.id, {
-        tools: stored.kind === 'native' ? nativeTools(stored.def) : apTools(stored.piece),
+        tools: stored.kind === 'native' ? nativeTools(stored.def, actionsForUser) : apTools(stored.piece, actionsForUser),
       });
 
     case 'tools/call': {
       const params = isRecord(request.params) ? request.params as ToolCallParams : {};
       if (!params.name) return failure(request.id, -32602, 'Missing tool name');
+      if (!hasAction(stored, params.name) || (actionsForUser && !actionsForUser.has(params.name))) {
+        return failure(request.id, -32602, `Unknown tool: ${params.name}`);
+      }
 
       const result = await runTool(
         pieceName,
@@ -241,16 +287,18 @@ async function handleRpc(pieceName: string, env: Env, credentials: RuntimeReques
   }
 }
 
-mcpApi.get('/mcp/:piece', (c) => {
+mcpApi.get('/mcp/:piece', async (c) => {
   const pieceName = c.req.param('piece');
   const stored = getPiece(pieceName);
   if (!stored) return c.json({ error: 'Piece not found' }, 404);
+
+  const actionsForUser = await enabledActionNames(pieceName, c.var.credentials, c.env);
 
   return c.json({
     name: pieceName,
     endpoint: `/mcp/${pieceName}`,
     protocolVersion: MCP_PROTOCOL_VERSION,
-    tools: stored.kind === 'native' ? nativeTools(stored.def) : apTools(stored.piece),
+    tools: stored.kind === 'native' ? nativeTools(stored.def, actionsForUser) : apTools(stored.piece, actionsForUser),
   });
 });
 

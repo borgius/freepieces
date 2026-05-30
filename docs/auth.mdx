@@ -60,10 +60,10 @@ Here is the route-level summary.
 | `GET /auth/login/:piece?userId=...` | browser/user | none at worker level | starts browser OAuth for native OAuth2 pieces |
 | `GET /auth/callback/:piece` | provider redirect | signed `state` parameter | finishes native OAuth2 flow and stores token |
 | `POST /auth/tokens/:piece` | admin/operator | OpenAuth admin session (cookie or Bearer JWT) | seeds tokens directly into KV |
-| `POST /run/:piece/:action` | app, script, SDK | runtime auth | executes an action |
-| `POST /mcp/:piece` | MCP client | runtime auth | exposes piece actions as MCP tools |
-| `POST /trigger/:piece/:trigger` | app, script, SDK | runtime auth | executes a trigger directly |
-| `POST /subscriptions/:piece/:trigger` | app, script, SDK | runtime auth | creates a stored subscription |
+| `POST /run/:piece/:action` | app, script, SDK | runtime auth | executes an action; disabled actions return `404` for that runtime user |
+| `POST /mcp/:piece` | MCP client | runtime auth | exposes enabled piece actions as MCP tools for that runtime user |
+| `POST /trigger/:piece/:trigger` | app, script, SDK | runtime auth | executes a trigger directly; disabled triggers return `404` for that runtime user |
+| `POST /subscriptions/:piece/:trigger` | app, script, SDK | runtime auth | creates a stored subscription; disabled triggers return `404` for that runtime user |
 | `GET /subscriptions/:piece` | app, script, SDK | runtime auth | lists subscriptions for the current runtime identity |
 | `DELETE /subscriptions/:piece/:trigger/:id` | app, script, SDK | runtime auth | deletes a subscription for the current runtime identity |
 | `POST /webhook/:piece` | provider webhook | provider-specific validation, if configured | receives inbound webhooks |
@@ -79,7 +79,7 @@ Here is the route-level summary.
 | Data | Where it lives | Notes |
 | --- | --- | --- |
 | Public Worker URL | `FREEPIECES_PUBLIC_URL` var | also accepted: `FP_PUBLIC_URL`. Used to build callback and webhook URLs |
-| Token store binding | `FREEPIECES_TOKEN_STORE` KV binding | also accepted: `FP_TOKEN_STORE`, `TOKEN_STORE`. Stores encrypted OAuth tokens and admin state |
+| Token store binding | `FREEPIECES_TOKEN_STORE` KV binding | also accepted: `FP_TOKEN_STORE`, `TOKEN_STORE`. Stores encrypted OAuth tokens, per-user tool state, subscriptions, and admin state |
 | Token encryption key | `FREEPIECES_TOKEN_ENCRYPTION_KEY` secret | also accepted: `FP_TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY`. 32 raw bytes as 64 hex characters |
 | Runtime caller key | `FREEPIECES_RUN_API_KEY` secret | also accepted: `FP_RUN_API_KEY`, `RUN_API_KEY`. Optional, but recommended for deployed workers |
 | Admin email allowlist | `FREEPIECES_ADMIN_EMAILS` secret | also accepted: `FP_ADMIN_EMAILS`, `ADMIN_EMAILS`. Comma-separated emails with the `admin` role |
@@ -123,6 +123,7 @@ This is the Cloudflare KV namespace binding.
 It is used for more than just tokens. In this repository it stores:
 
 - encrypted OAuth token records
+- per-user action and trigger state records
 - webhook subscription records
 - admin piece-enabled flags
 - other admin/runtime state keyed into the same namespace
@@ -380,7 +381,7 @@ X-Piece-Token: <token>
 Meaning:
 
 - `Authorization` proves the caller may use the worker
-- `X-User-Id` selects a stored OAuth token record from KV
+- `X-User-Id` selects a stored OAuth token record from KV and the per-user action/trigger state
 - `X-Piece-Token` carries a direct provider credential
 
 This is the most important rule in the whole auth system:
@@ -925,6 +926,14 @@ Check:
 - is `RUN_API_KEY` configured on the worker?
 - are you sending the exact same value in `Authorization: Bearer ...`?
 - if you are in local dev, did you maybe enable `RUN_API_KEY` without updating your requests?
+
+### `404 Action not found` or `404 Trigger not found`
+
+Check:
+
+- the piece name
+- the action or trigger name
+- whether the current runtime user disabled that action or trigger
 
 ### `Missing OAuth client credentials: ...`
 

@@ -8,6 +8,7 @@ import { resolveApRuntimeAuth, resolveNativeRuntimeAuth } from './auth-resolve';
 import { buildApTriggerContext, buildNativeTriggerContext } from './ap-context';
 import type { Env } from '../framework/types';
 import { requireKVBinding } from './env';
+import { isTriggerEnabledInState, loadUserToolState } from './user-tool-state';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -188,8 +189,9 @@ export async function dispatchWebhook(
   if (!stored) return;
   // Capture after null-check so nested closures see the narrowed StoredPiece type.
   const storedEntry = stored;
+  const kv = requireKVBinding(env, 'TOKEN_STORE');
 
-  const subs = await listSubscriptions(requireKVBinding(env, 'TOKEN_STORE'), pieceName);
+  const subs = await listSubscriptions(kv, pieceName);
 
   // Cache auth resolution per (userId, pieceToken) pair so 100 subs from the
   // same user don't each trigger a KV read + AES-GCM decrypt + refresh check.
@@ -205,10 +207,27 @@ export async function dispatchWebhook(
     return pending;
   };
 
+  const toolStateCache = new Map<string, ReturnType<typeof loadUserToolState>>();
+  function stateFor(userId: string | undefined): ReturnType<typeof loadUserToolState> {
+    const key = userId ?? '';
+    const cached = toolStateCache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = loadUserToolState(kv, userId, pieceName);
+    toolStateCache.set(key, pending);
+    return pending;
+  }
+
   await Promise.allSettled(
     subs.map(async (sub) => {
       const triggerDef = getTrigger(pieceName, sub.trigger);
       if (!triggerDef) return;
+
+      if (!isTriggerEnabledInState(await stateFor(sub.userId), sub.trigger)) {
+        return;
+      }
 
       const baseAuth = await authFor(
         sub.userId ?? sub.bearerToken,

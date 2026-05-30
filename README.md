@@ -25,8 +25,8 @@ The [Activepieces community](https://github.com/activepieces/activepieces/tree/m
 - **`fp` CLI** — scaffold a new Worker, search npm for pieces, install and generate wrappers, deploy
 - **Piece framework** — `createPiece()` and `createAction()` builders with full TypeScript types
 - **OAuth2 + API-key auth** — CSRF-protected OAuth flow, AES-256-GCM encrypted token storage in Cloudflare KV
-- **Automatic MCP servers** — every registered piece is exposed at `/mcp/:piece` with one tool per action
-- **Admin UI** — React SPA for managing pieces, secrets, connected OAuth users, OAuth sessions, and embedded MDX docs
+- **Automatic MCP servers** — every registered piece is exposed at `/mcp/:piece`, with enabled actions surfaced as MCP tools for the current runtime user
+- **Admin UI** — React SPA for managing pieces, per-user action and trigger toggles, secrets, connected OAuth users, OAuth sessions, and embedded MDX docs
 - **Activepieces compat shims** — drop-in `createAction`, `PieceAuth`, and `Property` wrappers for porting community pieces
 - **Bundled Cloudflare pieces** — native D1, R2, Queue, and Workflow actions for Worker bindings
 
@@ -129,7 +129,7 @@ Native and compat OAuth pieces must declare their own `clientIdEnvKey` and `clie
 
 ### MCP usage
 
-Every registered piece is also available as a Model Context Protocol server at `/mcp/:piece`. The endpoint uses the same runtime auth headers as `/run`.
+Every registered piece is also available as a Model Context Protocol server at `/mcp/:piece`. The endpoint uses the same runtime auth headers as `/run`, and only enabled actions for the current runtime user are listed as tools.
 
 ```json
 {
@@ -146,7 +146,7 @@ Every registered piece is also available as a Model Context Protocol server at `
 }
 ```
 
-Use `tools/list` to discover the action tools and `tools/call` to execute them.
+Use `tools/list` to discover the enabled action tools and `tools/call` to execute them.
 
 ### API routes
 
@@ -156,10 +156,10 @@ Use `tools/list` to discover the action tools and `tools/call` to execute them.
 | `GET` | `/pieces` | List registered pieces and actions |
 | `GET` | `/auth/login/:piece?userId=<id>` | Start OAuth2 flow |
 | `GET` | `/auth/callback/:piece` | OAuth2 callback, stores token |
-| `POST` | `/run/:piece/:action` | Execute an action (JSON body = props) |
-| `POST` | `/mcp/:piece` | MCP JSON-RPC endpoint for a piece; actions are exposed as tools |
-| `POST` | `/trigger/:piece/:trigger` | Execute a trigger filter for an inbound payload |
-| `POST` | `/subscriptions/:piece/:trigger` | Register a webhook subscription |
+| `POST` | `/run/:piece/:action` | Execute an action (JSON body = props); disabled actions return `404` for that runtime user |
+| `POST` | `/mcp/:piece` | MCP JSON-RPC endpoint for a piece; enabled actions are exposed as tools for the current runtime user |
+| `POST` | `/trigger/:piece/:trigger` | Execute a trigger filter for an inbound payload; disabled triggers return `404` for that runtime user |
+| `POST` | `/subscriptions/:piece/:trigger` | Register a webhook subscription; disabled triggers return `404` for that runtime user |
 | `GET` | `/subscriptions/:piece` | List subscriptions for the current runtime identity |
 | `DELETE` | `/subscriptions/:piece/:trigger/:id` | Delete a subscription for the current runtime identity |
 
@@ -168,7 +168,7 @@ Use `tools/list` to discover the action tools and `tools/call` to execute them.
 If `RUN_API_KEY` is configured on the worker, runtime endpoints use a split contract:
 
 - `Authorization: Bearer <RUN_API_KEY>` — authenticates the caller
-- `X-User-Id: <userId>` — identifies which stored OAuth2 token to read from KV
+- `X-User-Id: <userId>` — identifies which stored OAuth2 token to read from KV and which per-user action/trigger state to apply
 - `X-Piece-Token: <token>` — passes a direct runtime credential for API-key or single-prop `CUSTOM_AUTH` pieces
 - `X-Piece-Auth: {"prop":"val",…}` — passes multiple named credentials for multi-prop `CUSTOM_AUTH` pieces; value must be a JSON object where every value is a string
 

@@ -40,13 +40,15 @@ const DocsPage = lazy(async () => {
 
 export function App() {
   const [view, setView] = useState<View>('loading');
+  const [currentUserId, setCurrentUserId] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [nav, setNav] = useState(() => parseAdminUrl());
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     getMe()
-      .then(({ email }) => {
+      .then(({ userId, email }) => {
+        setCurrentUserId(userId);
         setUserEmail(email);
         setView('app');
       })
@@ -81,6 +83,7 @@ export function App() {
       await logout();
     } finally {
       setLoggingOut(false);
+      setCurrentUserId('');
       setUserEmail('');
       pushAdminUrl('pieces');
       setNav({ tab: 'pieces', section: 'secrets', triggerId: undefined });
@@ -153,7 +156,7 @@ export function App() {
               </Center>
             }
           >
-            {nav.tab === 'pieces' && <PiecesPage />}
+            {nav.tab === 'pieces' && <PiecesPage currentUserId={currentUserId} />}
             {nav.tab === 'add-piece' && <AddPiecePage />}
             {nav.tab === 'docs' && <DocsPage />}
             {nav.tab === 'settings' && (

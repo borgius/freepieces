@@ -52,6 +52,8 @@ Provider webhook
 
 The worker is not a general workflow engine here. It is a **trigger filter and fan-out layer**.
 
+Trigger availability is also per-user. If a trigger is disabled for the current runtime user, direct `POST /trigger/:piece/:trigger` calls and new `POST /subscriptions/:piece/:trigger` requests return `404 Trigger not found` for that user.
+
 ## Trigger building blocks
 
 There are three important routes.
@@ -176,6 +178,8 @@ Use the headers that match the piece auth model:
 - you may send both
 
 These values are stored with the subscription so freepieces can resolve auth later when webhook events arrive.
+
+If the trigger is later disabled for that same user, existing subscriptions stay stored but go dormant until the trigger is re-enabled. You can still delete them while they are disabled.
 
 ### Local dev behavior
 
@@ -517,6 +521,14 @@ This route is admin-session protected. It never returns raw `pieceToken` or `pie
 ### Using `/subscriptions/...` for native Gmail polling
 
 That will not work. Gmail in this repository is a native piece. Use the direct polling flow documented in [Polling triggers](./pooling.mdx).
+
+### `404 Trigger not found`
+
+Check:
+
+- the piece name
+- the trigger name
+- whether the trigger is enabled for the current runtime user
 
 ### Sending both `callbackUrl` and `queueName`
 

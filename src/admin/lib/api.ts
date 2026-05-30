@@ -60,6 +60,7 @@ export interface PieceAction {
   displayName: string;
   description: string | null;
   props: Record<string, PropDef> | null;
+  enabled: boolean;
 }
 
 export interface PieceTrigger {
@@ -68,6 +69,7 @@ export interface PieceTrigger {
   description: string | null;
   type: string;
   props: Record<string, PropDef> | null;
+  enabled: boolean;
 }
 
 export interface PieceUser {
@@ -115,7 +117,7 @@ export async function logout(): Promise<void> {
   await apiFetch('/admin/api/logout', { method: 'POST' });
 }
 
-export async function getMe(): Promise<{ email: string }> {
+export async function getMe(): Promise<{ userId: string; email: string }> {
   return apiFetch('/admin/api/me');
 }
 
@@ -129,6 +131,19 @@ export async function installPiece(name: string): Promise<void> {
 
 export async function uninstallPiece(name: string): Promise<void> {
   await apiFetch(`/admin/api/pieces/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export async function setPieceItemEnabled(
+  pieceName: string,
+  kind: 'action' | 'trigger',
+  name: string,
+  enabled: boolean,
+  userId?: string,
+): Promise<{ ok: true; pieceName: string; kind: 'action' | 'trigger'; name: string; enabled: boolean; userId: string }> {
+  return apiFetch(`/admin/api/pieces/${encodeURIComponent(pieceName)}/${kind}/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled, ...(userId ? { userId } : {}) }),
+  });
 }
 
 export async function listPieceUsers(name: string): Promise<PieceUser[]> {

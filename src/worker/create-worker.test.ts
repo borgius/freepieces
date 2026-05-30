@@ -1,13 +1,50 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Env } from '../framework/types';
+import { USER_TOOL_STATE_KEY } from '../lib/user-tool-state';
 
 // Must reset modules between tests because the registry is module-global.
 // Each test gets its own isolated registry state.
 
-function createEnv(): Env {
+class MemoryKv {
+  private readonly store = new Map<string, string>();
+
+  constructor(entries: Record<string, string> = {}) {
+    for (const [key, value] of Object.entries(entries)) {
+      this.store.set(key, value);
+    }
+  }
+
+  async get(key: string): Promise<string | null> {
+    return this.store.get(key) ?? null;
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.store.set(key, value);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+
+  async list(options?: { prefix?: string; cursor?: string }) {
+    const prefix = options?.prefix ?? '';
+    const keys = [...this.store.keys()]
+      .filter((key) => key.startsWith(prefix))
+      .sort()
+      .map((name) => ({ name }));
+
+    return {
+      keys,
+      list_complete: true,
+      cursor: '',
+    };
+  }
+}
+
+function createEnv(kv?: KVNamespace): Env {
   return {
     FREEPIECES_PUBLIC_URL: 'https://freepieces.example.workers.dev',
-    FREEPIECES_TOKEN_STORE: undefined,
+    FREEPIECES_TOKEN_STORE: kv,
     FREEPIECES_AUTH_STORE: undefined,
     FREEPIECES_TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
     FREEPIECES_ADMIN_EMAILS: 'admin@example.com',
@@ -16,6 +53,47 @@ function createEnv(): Env {
 
 function createCtx(): ExecutionContext {
   return { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
+}
+
+async function createWorkerWithTogglePiece(runApiKey?: string, kv?: KVNamespace) {
+  const { createFreepiecesWorker } = await import('./create-worker.js');
+  const { registerPiece } = await import('../framework/registry.js');
+  const env = createEnv(kv);
+  env.FREEPIECES_RUN_API_KEY = runApiKey;
+
+  registerPiece({
+    name: 'toggle-test',
+    displayName: 'Toggle Test',
+    version: '1.0.0',
+    auth: { type: 'none' },
+    actions: [
+      {
+        name: 'inspect',
+        displayName: 'Inspect',
+        description: 'Returns the supplied props.',
+        props: {
+          message: {
+            type: 'SHORT_TEXT',
+            displayName: 'Message',
+            required: false,
+          },
+        },
+        run: async (ctx) => ({ props: ctx.props }),
+      },
+    ],
+    triggers: [
+      {
+        name: 'new-event',
+        displayName: 'New Event',
+        description: 'Returns one synthetic event.',
+        type: 'WEBHOOK',
+        props: {},
+        run: async () => [{ id: 'evt-1' }],
+      },
+    ],
+  });
+
+  return { worker: createFreepiecesWorker(), env };
 }
 
 describe('createFreepiecesWorker()', () => {
@@ -326,6 +404,161 @@ describe('createFreepiecesWorker()', () => {
         auth: { token: 'local-piece-token' },
         props: { message: 'local' },
       });
+    });
+
+    it('filters disabled actions out of MCP tool discovery for the current user', async () => {
+      const kv = new MemoryKv({
+        [USER_TOOL_STATE_KEY('admin-user', 'toggle-test')]: JSON.stringify({
+          version: 1,
+          disabledActions: ['inspect'],
+          disabledTriggers: [],
+        }),
+      }) as unknown as KVNamespace;
+
+      const { worker, env } = await createWorkerWithTogglePiece('fp_sk_toggle', kv);
+      const response = await worker.fetch(
+        new Request('https://freepieces.example.workers.dev/mcp/toggle-test', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer fp_sk_toggle',
+            'Content-Type': 'application/json',
+            'X-User-Id': 'admin-user',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 'tools', method: 'tools/list' }),
+        }),
+        env,
+        createCtx(),
+      );
+
+      expect(response.status).toBe(200);
+      const body = await response.json() as { result: { tools: Array<{ name: string }> } };
+      expect(body.result.tools).toEqual([]);
+    });
+
+    it('treats disabled MCP actions as unknown tools for the current user', async () => {
+      const kv = new MemoryKv({
+        [USER_TOOL_STATE_KEY('admin-user', 'toggle-test')]: JSON.stringify({
+          version: 1,
+          disabledActions: ['inspect'],
+          disabledTriggers: [],
+        }),
+      }) as unknown as KVNamespace;
+
+      const { worker, env } = await createWorkerWithTogglePiece('fp_sk_toggle', kv);
+      const response = await worker.fetch(
+        new Request('https://freepieces.example.workers.dev/mcp/toggle-test', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer fp_sk_toggle',
+            'Content-Type': 'application/json',
+            'X-User-Id': 'admin-user',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+              name: 'inspect',
+              arguments: { message: 'hello' },
+            },
+          }),
+        }),
+        env,
+        createCtx(),
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32602, message: 'Unknown tool: inspect' },
+      });
+    });
+  });
+
+  describe('runtime user toggles', () => {
+    it('returns 404 from /run when the action is disabled for the current user', async () => {
+      const kv = new MemoryKv({
+        [USER_TOOL_STATE_KEY('admin-user', 'toggle-test')]: JSON.stringify({
+          version: 1,
+          disabledActions: ['inspect'],
+          disabledTriggers: [],
+        }),
+      }) as unknown as KVNamespace;
+
+      const { worker, env } = await createWorkerWithTogglePiece('fp_sk_toggle', kv);
+      const response = await worker.fetch(
+        new Request('https://freepieces.example.workers.dev/run/toggle-test/inspect', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer fp_sk_toggle',
+            'Content-Type': 'application/json',
+            'X-User-Id': 'admin-user',
+          },
+          body: JSON.stringify({ message: 'hello' }),
+        }),
+        env,
+        createCtx(),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: 'Action not found' });
+    });
+
+    it('returns 404 from /trigger when the trigger is disabled for the current user', async () => {
+      const kv = new MemoryKv({
+        [USER_TOOL_STATE_KEY('admin-user', 'toggle-test')]: JSON.stringify({
+          version: 1,
+          disabledActions: [],
+          disabledTriggers: ['new-event'],
+        }),
+      }) as unknown as KVNamespace;
+
+      const { worker, env } = await createWorkerWithTogglePiece('fp_sk_toggle', kv);
+      const response = await worker.fetch(
+        new Request('https://freepieces.example.workers.dev/trigger/toggle-test/new-event', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer fp_sk_toggle',
+            'Content-Type': 'application/json',
+            'X-User-Id': 'admin-user',
+          },
+          body: JSON.stringify({ payload: { ok: true } }),
+        }),
+        env,
+        createCtx(),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: 'Trigger not found' });
+    });
+
+    it('returns 404 from /subscriptions when the trigger is disabled for the current user', async () => {
+      const kv = new MemoryKv({
+        [USER_TOOL_STATE_KEY('admin-user', 'toggle-test')]: JSON.stringify({
+          version: 1,
+          disabledActions: [],
+          disabledTriggers: ['new-event'],
+        }),
+      }) as unknown as KVNamespace;
+
+      const { worker, env } = await createWorkerWithTogglePiece('fp_sk_toggle', kv);
+      const response = await worker.fetch(
+        new Request('https://freepieces.example.workers.dev/subscriptions/toggle-test/new-event', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer fp_sk_toggle',
+            'Content-Type': 'application/json',
+            'X-User-Id': 'admin-user',
+          },
+          body: JSON.stringify({ callbackUrl: 'https://example.com/callback', propsValue: {} }),
+        }),
+        env,
+        createCtx(),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: 'Trigger not found' });
     });
   });
 });

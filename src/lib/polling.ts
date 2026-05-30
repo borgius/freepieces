@@ -15,6 +15,7 @@ import { resolveApRuntimeAuth, resolveNativeRuntimeAuth } from './auth-resolve';
 import { buildApTriggerContext, buildNativeTriggerContext } from './ap-context';
 import { requireKVBinding } from './env';
 import type { Env, PieceTriggerContext } from '../framework/types';
+import { isTriggerEnabledInState, loadUserToolState } from './user-tool-state';
 
 /** KV key for the per-subscription last-poll timestamp (ms epoch). */
 const POLL_MS_KEY = (subId: string): string => `poll_ms:${subId}`;
@@ -50,8 +51,25 @@ async function pollPieceTrigger(
   const subs = (await listSubscriptions(kv, pieceName)).filter((s) => s.trigger === triggerName);
   if (subs.length === 0) return;
 
+  const toolStateCache = new Map<string, ReturnType<typeof loadUserToolState>>();
+  function stateFor(userId: string | undefined): ReturnType<typeof loadUserToolState> {
+    const key = userId ?? '';
+    const cached = toolStateCache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = loadUserToolState(kv, userId, pieceName);
+    toolStateCache.set(key, pending);
+    return pending;
+  }
+
   await Promise.allSettled(
     subs.map(async (sub) => {
+      if (!isTriggerEnabledInState(await stateFor(sub.userId), triggerName)) {
+        return;
+      }
+
       // Restore per-subscription cursor
       const lastMsRaw = await kv.get(POLL_MS_KEY(sub.id));
       const lastPollMs = lastMsRaw ? Number(lastMsRaw) : 0;

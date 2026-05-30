@@ -49,6 +49,8 @@ The worker then:
 
 Actions are synchronous from the caller's point of view. They do not create subscriptions, wait for external events, or push results to queues.
 
+Action availability is also per-user. If an action is disabled for the current runtime user, `POST /run/:piece/:action` returns `404 Action not found` for that user.
+
 ## What an action is
 
 An action is a named operation on a piece.
@@ -165,7 +167,7 @@ X-Piece-Token: <token>
 Meaning:
 
 - `Authorization` authenticates the caller
-- `X-User-Id` selects a stored OAuth2 token from KV
+- `X-User-Id` selects a stored OAuth2 token from KV and the per-user action visibility state
 - `X-Piece-Token` passes a direct runtime credential such as a bot token or raw API key
 
 Send the headers that match the piece auth model.
@@ -265,7 +267,7 @@ On action failure inside the worker, it returns:
 Other common error shapes:
 
 - `401` with `{ "error": "Unauthorized" }`
-- `404` with `{ "error": "Action not found" }`
+- `404` with `{ "error": "Action not found" }` when the name is wrong or the action is disabled for the current runtime user
 
 ## Action execution flow inside the worker
 
@@ -523,6 +525,7 @@ Check:
 - the piece name
 - the action name
 - whether the piece is registered in `/pieces`
+- whether the action is enabled for the current runtime user
 
 ### `ok: false, error: "Action execution failed"`
 

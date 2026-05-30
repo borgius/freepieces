@@ -1,7 +1,7 @@
 export const meta = {
   slug: 'mcp',
   title: 'MCP',
-  summary: 'Expose every registered piece as a Model Context Protocol server with one tool per action.',
+  summary: 'Expose each registered piece as a Model Context Protocol server with enabled actions listed as tools for the current user.',
   section: 'runtime',
   order: 45,
   estimatedTime: '10 min',
@@ -17,7 +17,9 @@ Each piece gets its own endpoint:
 POST /mcp/:piece
 ```
 
-Every action on the piece becomes an MCP tool. You do not need to write a separate MCP adapter for each piece.
+Enabled actions on the piece become MCP tools for the current runtime user. You do not need to write a separate MCP adapter for each piece.
+
+Triggers are not exposed through MCP.
 
 ## Auth
 
@@ -35,7 +37,7 @@ X-Piece-Auth: {"prop":"value"}
 Meaning:
 
 - `Authorization` authenticates the MCP caller to the worker.
-- `X-User-Id` selects the stored OAuth2 token for OAuth-backed pieces.
+- `X-User-Id` selects the stored OAuth2 token for OAuth-backed pieces and the per-user action visibility state.
 - `X-Piece-Token` passes a direct credential for API-key or single-prop `CUSTOM_AUTH` pieces.
 - `X-Piece-Auth` passes multiple named direct credentials for multi-prop `CUSTOM_AUTH` pieces.
 
@@ -79,7 +81,7 @@ curl "https://<your-worker>.workers.dev/mcp/gmail" \
   }'
 ```
 
-The response contains one tool per action. Tool names are the same action names used by `/run/:piece/:action`.
+The response contains one tool per enabled action for the current runtime user. Tool names are the same action names used by `/run/:piece/:action`.
 
 ## Call a tool
 
@@ -104,13 +106,15 @@ curl "https://<your-worker>.workers.dev/mcp/example-apikey" \
 
 Tool call results include both MCP `content` text and `structuredContent` with the original action result.
 
+If a tool is disabled for the current runtime user, it is omitted from `tools/list`, omitted from `GET /mcp/:piece`, and treated like an unknown tool when called.
+
 ## Supported methods
 
 | Method | Description |
 | --- | --- |
 | `initialize` | Returns server metadata and tool capability support |
 | `ping` | Returns an empty success result |
-| `tools/list` | Lists the selected piece's actions as MCP tools |
+| `tools/list` | Lists the selected piece's enabled actions as MCP tools for the current runtime user |
 | `tools/call` | Runs one selected action with `params.arguments` as props |
 
 ## Discoverability
@@ -123,4 +127,4 @@ Authenticated callers can also inspect one piece endpoint with:
 GET /mcp/:piece
 ```
 
-That returns the endpoint path, supported protocol version, and generated tool list.
+That returns the endpoint path, supported protocol version, and the enabled tool list for the current runtime user.

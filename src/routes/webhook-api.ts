@@ -20,6 +20,7 @@ import type { RuntimeRequestCredentials } from '../lib/request-auth';
 import { getEnvStr, requireKVBinding } from '../lib/env';
 import { buildNativeTriggerContext, buildApTriggerContext } from '../lib/ap-context';
 import { resolveNativeRuntimeAuth, resolveApRuntimeAuth } from '../lib/auth-resolve';
+import { isTriggerEnabledForUser } from '../lib/user-tool-state';
 
 /** Allow HTTPS everywhere; allow HTTP only for loopback (local dev). */
 function isValidCallbackUrl(url: string): boolean {
@@ -173,6 +174,10 @@ webhookApi.post('/subscriptions/:piece/:trigger', async (c) => {
   }
 
   const { userId, pieceToken, pieceAuthProps } = c.var.credentials;
+
+  if (!(await isTriggerEnabledForUser(requireKVBinding(c.env, 'TOKEN_STORE'), userId, pieceName, triggerName))) {
+    return c.json({ error: 'Trigger not found' }, 404);
+  }
 
   let subBody: { callbackUrl?: string; queueName?: string; propsValue?: Record<string, unknown> };
   try {

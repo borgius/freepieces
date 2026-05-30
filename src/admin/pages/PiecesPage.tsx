@@ -14,7 +14,7 @@ import { RefreshCw } from 'lucide-react';
 import { type PieceInfo, listPieces } from '../lib/api';
 import { PieceCard } from '../components/PieceCard';
 
-export function PiecesPage() {
+export function PiecesPage({ currentUserId }: { currentUserId: string }) {
   const [pieces, setPieces] = useState<PieceInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -115,6 +115,7 @@ export function PiecesPage() {
           {pieces.map((piece) => (
             <PieceCard
               key={piece.name}
+              currentUserId={currentUserId}
               piece={piece}
               onToggle={handlePieceToggle}
             />

@@ -508,7 +508,7 @@ export function ItemMcpTab({ pieceName }: { pieceName: string }) {
           MCP Endpoint
         </Text>
         <Text fontSize="xs" color="gray.600" mb={2}>
-          All <code>{pieceName}</code> actions are available as MCP tools at this endpoint.
+          Only enabled <code>{pieceName}</code> actions for the current user appear as MCP tools at this endpoint.
         </Text>
         <HStack bg="blue.50" borderWidth="1px" borderColor="blue.200" rounded="md" px={3} py={2} gap={2}>
           <Box flex={1} fontFamily="mono" fontSize="xs" color="blue.700" wordBreak="break-all">
