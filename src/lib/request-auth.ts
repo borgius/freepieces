@@ -1,5 +1,6 @@
 import { timingSafeEqual } from './admin-session';
 import { createAuthClient, subjects } from '../auth/client';
+import { isProfileToken, profileToolOwner, type ProfileTokenRef } from './profile-store';
 
 // Per-isolate cache for the OpenAuth client. createClient() keeps an internal
 // jwksCache + issuerCache; reusing the same instance across requests lets the
@@ -20,6 +21,12 @@ function getCachedAuthClient(publicUrl: string, issuerFetch?: typeof fetch) {
 
 export interface RuntimeRequestCredentials {
   userId?: string;
+  /**
+   * Owner key used to scope per-piece tool selection (enabled actions/triggers).
+   * Defaults to `userId` for header/key/JWT auth; for profile-token auth this is
+   * `profile:<profileId>` so each profile carries its own enabled tool set.
+   */
+  toolOwnerId?: string;
   pieceToken?: string;
   /**
    * Per-request CUSTOM_AUTH prop overrides parsed from `X-Piece-Auth`.
@@ -58,6 +65,11 @@ function parsePieceAuthHeader(value: string | null): Record<string, string> | un
  *
  * Modes (in priority order):
  *
+ * 0. Scoped profile token (`fp_pt_*` bearer, `resolveProfile` provided):
+ *    - Authorization carries the `fp_pt_<token>` value ← resolves the owning
+ *      user identity and the profile's enabled tool set; no X-User-Id required
+ *    - X-Piece-Token / X-Piece-Auth          ← optional as in mode 1
+ *
  * 1. Static API key (`RUN_API_KEY` set, bearer matches `fp_sk_*` pattern):
  *    - Authorization: Bearer <RUN_API_KEY>   ← authenticates the caller
  *    - X-User-Id: <userId>                   ← KV lookup key for stored OAuth2 tokens
@@ -79,11 +91,32 @@ export async function resolveRuntimeRequestAuth(
   publicUrl?: string,
   issuerFetch?: typeof fetch,
   disableAuth?: boolean,
+  resolveProfile?: (token: string) => Promise<ProfileTokenRef | null>,
 ): Promise<RuntimeRequestAuthResult> {
   const authHeader = headers.get('authorization');
   const bearerToken = authHeader?.startsWith('Bearer ')
     ? authHeader.slice(7)
     : undefined;
+
+  // Mode 0: Scoped profile token. Checked first so it works regardless of
+  // RUN_API_KEY / DISABLE_AUTH, and so a profile token can never be mistaken
+  // for a user id in the fallback modes. A well-formed but unknown/revoked
+  // profile token is rejected rather than falling through.
+  if (bearerToken && resolveProfile && isProfileToken(bearerToken)) {
+    const ref = await resolveProfile(bearerToken);
+    if (!ref) {
+      return { ok: false, status: 401, error: 'Unauthorized' };
+    }
+    return {
+      ok: true,
+      credentials: {
+        userId: ref.userId,
+        toolOwnerId: profileToolOwner(ref.profileId),
+        pieceToken: headers.get('x-piece-token') ?? undefined,
+        pieceAuthProps: parsePieceAuthHeader(headers.get('x-piece-auth')),
+      },
+    };
+  }
 
   // Local-dev auth bypass: only honoured when RUN_API_KEY is not configured.
   if (disableAuth && !runApiKey) {

@@ -148,6 +148,89 @@ describe('resolveRuntimeRequestAuth', () => {
     });
   });
 
+  describe('profile tokens', () => {
+    const resolveProfile = async (token: string) =>
+      token === 'fp_pt_valid' ? { userId: 'owner@example.com', profileId: 'prof-1' } : null;
+
+    it('resolves a profile token to its owning identity and tool owner without X-User-Id', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers({ authorization: 'Bearer fp_pt_valid' }),
+        'fp_sk_expected',
+        undefined,
+        undefined,
+        undefined,
+        resolveProfile,
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          userId: 'owner@example.com',
+          toolOwnerId: 'profile:prof-1',
+          pieceToken: undefined,
+          pieceAuthProps: undefined,
+        },
+      });
+    });
+
+    it('ignores X-User-Id and still carries piece credentials for profile tokens', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers({
+          authorization: 'Bearer fp_pt_valid',
+          'x-user-id': 'attacker@example.com',
+          'x-piece-token': 'xoxb-piece-token',
+        }),
+        'fp_sk_expected',
+        undefined,
+        undefined,
+        undefined,
+        resolveProfile,
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          userId: 'owner@example.com',
+          toolOwnerId: 'profile:prof-1',
+          pieceToken: 'xoxb-piece-token',
+          pieceAuthProps: undefined,
+        },
+      });
+    });
+
+    it('rejects an unknown or revoked profile token instead of falling through', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers({ authorization: 'Bearer fp_pt_unknown' }),
+        undefined,
+        undefined,
+        undefined,
+        true,
+        resolveProfile,
+      );
+
+      expect(result).toEqual({ ok: false, status: 401, error: 'Unauthorized' });
+    });
+
+    it('does not treat non-profile bearer tokens as profile tokens', async () => {
+      const result = await resolveRuntimeRequestAuth(
+        new Headers({ authorization: 'Bearer plain-user' }),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        resolveProfile,
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        credentials: {
+          userId: 'plain-user',
+          pieceToken: 'plain-user',
+        },
+      });
+    });
+  });
+
   describe('DISABLE_AUTH', () => {
     it('bypasses auth entirely when disableAuth is true and RUN_API_KEY is absent', async () => {
       const result = await resolveRuntimeRequestAuth(

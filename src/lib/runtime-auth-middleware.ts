@@ -1,7 +1,8 @@
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { resolveRuntimeRequestAuth, type RuntimeRequestCredentials } from './request-auth';
-import { getEnvBool, getEnvStr } from './env';
+import { getEnvBool, getEnvStr, getKVBinding } from './env';
+import { resolveProfileToken } from './profile-store';
 import { createAuthIssuer } from '../auth/issuer';
 import type { Env } from '../framework/types';
 
@@ -40,6 +41,10 @@ export const runtimeAuth = createMiddleware<{
     new URL(c.req.url).origin,
     issuerFetch,
     getEnvBool(c.env, 'DISABLE_AUTH'),
+    (token) => {
+      const tokenStore = getKVBinding(c.env, 'TOKEN_STORE');
+      return tokenStore ? resolveProfileToken(tokenStore, token) : Promise.resolve(null);
+    },
   );
   if (!result.ok) {
     throw new HTTPException(result.status, { message: result.error });
