@@ -18,19 +18,28 @@ let jqPromise: Promise<JqWeb> | null = null;
 /** Lazily initialise and cache the jq-web instance. */
 async function getJq(): Promise<JqWeb> {
   if (!jqPromise) {
-    jqPromise = import('jq-web')
-      .then(async (mod): Promise<JqWeb> => {
-        // The default export is a thenable that resolves to the JqWeb instance.
-        const def = (mod as { default?: unknown }).default ?? mod;
-        return (await def) as JqWeb;
-      })
-      .catch((err) => {
-        // Reset so a transient load failure can be retried on the next call.
-        jqPromise = null;
-        throw err;
-      });
+    jqPromise = loadJq().catch((err) => {
+      // Reset so a transient load failure can be retried on the next call.
+      jqPromise = null;
+      throw err;
+    });
   }
   return jqPromise;
+}
+
+/**
+ * Load the `jq-web` CommonJS module via `createRequire`. The package's
+ * `module.exports` is itself a thenable that resolves to the engine instance;
+ * loading it through `require` (rather than a dynamic ESM `import`) avoids the
+ * ESM namespace being treated as a thenable and double-unwrapped. jq-web also
+ * loads its WebAssembly at runtime, so it only works on the Node/linux runtime.
+ */
+async function loadJq(): Promise<JqWeb> {
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  // `module.exports` is a Promise-like that resolves to the JqWeb instance.
+  const mod = require('jq-web') as PromiseLike<JqWeb>;
+  return (await mod) as JqWeb;
 }
 
 /**
