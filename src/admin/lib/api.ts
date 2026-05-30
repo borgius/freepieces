@@ -190,11 +190,16 @@ export interface TriggerMember {
   createdAt: string;
   owner: TriggerOwner;
   deliveryTarget: TriggerDeliveryTarget;
+  method?: string;
+  headers?: Record<string, string>;
+  args?: string[];
+  cwd?: string;
+  jqTransform?: string;
 }
 
 export interface TriggerGroup {
   endpointKey: string;
-  endpointType: 'callbackUrl' | 'queueName';
+  endpointType: 'callbackUrl' | 'queueName' | 'command';
   endpointValue: string;
   memberCount: number;
   members: TriggerMember[];
@@ -208,10 +213,25 @@ export async function getTriggerGroups(): Promise<TriggerGroupsResponse> {
   return apiFetch('/admin/api/triggers/groups');
 }
 
+export interface SubscriptionDeliveryBody {
+  callbackUrl?: string;
+  queueName?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  method?: string;
+  headers?: Record<string, string>;
+  jqTransform?: string;
+  pieceToken?: string;
+  userId?: string;
+  propsValue?: Record<string, unknown>;
+}
+
 export async function createAdminSubscription(
   piece: string,
   trigger: string,
-  body: { callbackUrl?: string; queueName?: string; pieceToken?: string; userId?: string; propsValue?: Record<string, unknown> },
+  body: SubscriptionDeliveryBody,
 ): Promise<{ ok: boolean; id: string }> {
   return apiFetch(`/admin/api/subscriptions/${encodeURIComponent(piece)}/${encodeURIComponent(trigger)}`, {
     method: 'POST',
@@ -222,10 +242,39 @@ export async function createAdminSubscription(
 export async function updateAdminSubscription(
   piece: string,
   id: string,
-  body: { callbackUrl?: string } | { queueName?: string },
+  body: SubscriptionDeliveryBody,
 ): Promise<{ ok: boolean }> {
   return apiFetch(`/admin/api/subscriptions/${encodeURIComponent(piece)}/${encodeURIComponent(id)}`, {
     method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+// ── Runtime capabilities ────────────────────────────────────────────────────
+
+export interface RuntimeInfo {
+  runtime: 'node' | 'workers';
+  supportsCliHooks: boolean;
+}
+
+export async function getRuntimeInfo(): Promise<RuntimeInfo> {
+  return apiFetch('/admin/api/runtime');
+}
+
+// ── jq transform preview ────────────────────────────────────────────────────
+
+export type JqSampleResponse =
+  | { ok: true; input: unknown; result: unknown }
+  | { ok: false; input: unknown; error: string };
+
+export async function sampleJqTransform(body: {
+  piece?: string;
+  trigger?: string;
+  program: string;
+  sample?: unknown;
+}): Promise<JqSampleResponse> {
+  return apiFetch('/admin/api/subscriptions/jq-sample', {
+    method: 'POST',
     body: JSON.stringify(body),
   });
 }

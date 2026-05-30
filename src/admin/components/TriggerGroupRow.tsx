@@ -20,7 +20,9 @@ import { InlineInput } from './TriggerInlineControls';
 // ---------------------------------------------------------------------------
 
 export function endpointTypeLabel(type: string): string {
-  return type === 'callbackUrl' ? 'HTTPS callback' : 'Cloudflare Queue';
+  if (type === 'callbackUrl') return 'HTTPS callback';
+  if (type === 'command') return 'CLI command';
+  return 'Cloudflare Queue';
 }
 
 function formatDate(iso: string): string {
@@ -97,6 +99,30 @@ function TriggerMemberRow({
               <Text fontSize="2xs" color="gray.400" w="28" flexShrink={0}>Created</Text>
               <Text fontSize="2xs" color="gray.500">{formatDate(member.createdAt)}</Text>
             </HStack>
+            {member.method && member.method !== 'POST' && (
+              <HStack gap={1.5} align="center">
+                <Text fontSize="2xs" color="gray.400" w="28" flexShrink={0}>Method</Text>
+                <Badge colorPalette="blue" variant="subtle" fontSize="2xs">{member.method}</Badge>
+              </HStack>
+            )}
+            {member.headers && Object.keys(member.headers).length > 0 && (
+              <HStack gap={1.5} align="flex-start">
+                <Text fontSize="2xs" color="gray.400" w="28" flexShrink={0}>Headers</Text>
+                <Flex gap={1} flexWrap="wrap">
+                  {Object.keys(member.headers).map((h) => (
+                    <Badge key={h} colorPalette="gray" variant="subtle" fontSize="2xs" fontFamily="mono">{h}</Badge>
+                  ))}
+                </Flex>
+              </HStack>
+            )}
+            {member.jqTransform && (
+              <HStack gap={1.5} align="flex-start">
+                <Text fontSize="2xs" color="gray.400" w="28" flexShrink={0}>jq</Text>
+                <Code fontSize="2xs" colorPalette="purple" variant="surface" px={1.5} py={0.5} wordBreak="break-all">
+                  {member.jqTransform}
+                </Code>
+              </HStack>
+            )}
           </VStack>
         </Box>
 
@@ -164,11 +190,30 @@ export function TriggerGroupRow({
     setSaving(true);
     setSaveError('');
     try {
-      const body = group.endpointType === 'callbackUrl'
-        ? { callbackUrl: editValue }
-        : { queueName: editValue };
       await Promise.all(
-        group.members.map((m) => updateAdminSubscription(m.pieceName, m.subscriptionId, body)),
+        group.members.map((m) => {
+          // Preserve each member's own delivery/transform config; only the
+          // endpoint value changes. PATCH fully replaces delivery fields, so we
+          // must round-trip the existing ones.
+          const base =
+            group.endpointType === 'callbackUrl'
+              ? {
+                  callbackUrl: editValue,
+                  ...(m.method ? { method: m.method } : {}),
+                  ...(m.headers ? { headers: m.headers } : {}),
+                }
+              : group.endpointType === 'command'
+                ? {
+                    command: editValue,
+                    ...(m.args ? { args: m.args } : {}),
+                    ...(m.cwd ? { cwd: m.cwd } : {}),
+                  }
+                : { queueName: editValue };
+          return updateAdminSubscription(m.pieceName, m.subscriptionId, {
+            ...base,
+            ...(m.jqTransform ? { jqTransform: m.jqTransform } : {}),
+          });
+        }),
       );
       setEditing(false);
       onRefresh();
@@ -219,7 +264,13 @@ export function TriggerGroupRow({
               <InlineInput
                 value={editValue}
                 onChange={setEditValue}
-                placeholder={group.endpointType === 'callbackUrl' ? 'https://…' : 'queue-name'}
+                placeholder={
+                  group.endpointType === 'callbackUrl'
+                    ? 'https://…'
+                    : group.endpointType === 'command'
+                      ? '/usr/local/bin/my-hook'
+                      : 'queue-name'
+                }
                 autoFocus
               />
               {saveError && <Text fontSize="2xs" color="red.500">{saveError}</Text>}
