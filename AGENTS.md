@@ -28,6 +28,15 @@ When `RUN_API_KEY` is configured:
 
 When `RUN_API_KEY` is absent (local dev), the bearer token is the fallback for both modes. Prefer keeping `X-User-Id`, `X-Piece-Token`, and `X-Piece-Auth` support wired in examples and clients so local and deployed behavior stay aligned.
 
+### Profile tokens
+
+A scoped profile token (`fp_pt_*` bearer) is resolved before the static-key/JWT modes and works regardless of `RUN_API_KEY` / `DISABLE_AUTH`:
+
+- `Authorization` carries the `fp_pt_<token>` value; it resolves the owning `userId` and the profile's enabled tool set — **no** `X-User-Id` header is required (and any `X-User-Id` is ignored)
+- profiles are managed from **Settings → Profiles** in the admin panel (`/admin/api/profiles*`) and persisted in `TOKEN_STORE` (`__admin:profile:*`, `__admin:profile-token:*`); tokens are stored only as a SHA-256 hash
+- per-profile tool selection reuses the user-tool-state store keyed by `profile:<profileId>`
+- unknown/revoked profile tokens are rejected with `401`
+
 ## Validation before finishing
 
 Run the relevant checks after edits:
