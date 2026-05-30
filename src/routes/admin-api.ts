@@ -26,8 +26,10 @@ import {
 } from '../lib/admin-config';
 import type { Env } from '../framework/types';
 import { requireEnvStr, requireKVBinding, getEnvBool } from '../lib/env';
-import { listAllSubscriptions, SUB_KEY, resolveQueueBinding } from '../lib/webhook';
-import type { WebhookSubscription } from '../lib/webhook';
+import { listAllSubscriptions, SUB_KEY, resolveQueueBinding, isWebhookMethod, WEBHOOK_METHODS } from '../lib/webhook';
+import type { WebhookSubscription, WebhookMethod } from '../lib/webhook';
+import { isNodeRuntime } from '../lib/cli-hook';
+import { validateJq } from '../lib/jq';
 import {
   isActionEnabledForUser,
   isActionEnabledInState,
@@ -48,6 +50,124 @@ function isValidCallbackUrl(url: string): boolean {
     }
     return false;
   } catch { return false; }
+}
+
+// Header injection limits — header config is admin-authored but still capped.
+const MAX_HEADERS = 50;
+const MAX_HEADER_NAME_LEN = 256;
+const MAX_HEADER_VALUE_LEN = 8192;
+const MAX_JQ_PROGRAM_LEN = 10_000;
+const MAX_COMMAND_LEN = 4096;
+const MAX_CLI_ARGS = 100;
+/** RFC 7230 header field-name token characters. */
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Validate an additional-headers map. Header values may contain `${ENV}`
+ * references (resolved at dispatch); we cap counts/lengths and reject malformed
+ * names, but never resolve or echo secret values here.
+ */
+function validateHeaders(headers: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+  if (headers === undefined || headers === null) return { ok: true, value: {} };
+  if (typeof headers !== 'object' || Array.isArray(headers)) {
+    return { ok: false, error: 'headers must be an object of string values' };
+  }
+  const entries = Object.entries(headers as Record<string, unknown>);
+  if (entries.length > MAX_HEADERS) return { ok: false, error: `Too many headers (max ${MAX_HEADERS})` };
+  const out: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    if (name.length === 0 || name.length > MAX_HEADER_NAME_LEN || !HEADER_NAME_RE.test(name)) {
+      return { ok: false, error: `Invalid header name: ${name.slice(0, 64)}` };
+    }
+    if (typeof value !== 'string') return { ok: false, error: `Header "${name}" must be a string` };
+    if (value.length > MAX_HEADER_VALUE_LEN) return { ok: false, error: `Header "${name}" value too long` };
+    out[name] = value;
+  }
+  return { ok: true, value: out };
+}
+
+/** Validate optional CLI args array. */
+function validateArgs(args: unknown): { ok: true; value: string[] } | { ok: false; error: string } {
+  if (args === undefined || args === null) return { ok: true, value: [] };
+  if (!Array.isArray(args)) return { ok: false, error: 'args must be an array of strings' };
+  if (args.length > MAX_CLI_ARGS) return { ok: false, error: `Too many args (max ${MAX_CLI_ARGS})` };
+  if (!args.every((a) => typeof a === 'string')) return { ok: false, error: 'args must be strings' };
+  return { ok: true, value: args as string[] };
+}
+
+interface DeliveryFields {
+  callbackUrl?: string;
+  queueName?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  method?: WebhookMethod;
+  headers?: Record<string, string>;
+  jqTransform?: string;
+}
+
+/**
+ * Validate the delivery + transform fields shared by the POST and PATCH
+ * subscription handlers. Enforces that exactly one of callbackUrl / queueName /
+ * command is provided and that CLI hooks only run on the Node runtime.
+ */
+function validateDeliveryBody(
+  body: Record<string, unknown>,
+  env: Env,
+): { ok: true; value: DeliveryFields } | { ok: false; error: string } {
+  const callbackUrl = typeof body.callbackUrl === 'string' && body.callbackUrl ? body.callbackUrl : undefined;
+  const queueName = typeof body.queueName === 'string' && body.queueName ? body.queueName : undefined;
+  const command = typeof body.command === 'string' && body.command ? body.command : undefined;
+
+  const provided = [callbackUrl, queueName, command].filter(Boolean).length;
+  if (provided > 1) return { ok: false, error: 'Provide exactly one of callbackUrl, queueName, or command' };
+  if (provided === 0) return { ok: false, error: 'Missing callbackUrl, queueName, or command' };
+
+  if (callbackUrl && !isValidCallbackUrl(callbackUrl)) {
+    return { ok: false, error: 'callbackUrl must be a valid HTTPS URL (or http://localhost / http://127.0.0.1 for local dev)' };
+  }
+  if (queueName && !resolveQueueBinding(env, queueName)) {
+    return { ok: false, error: `Queue binding not found for "${queueName}"` };
+  }
+
+  const out: DeliveryFields = {};
+
+  if (command) {
+    if (!isNodeRuntime()) {
+      return { ok: false, error: 'CLI hooks are only supported on the self-hosted Node.js runtime' };
+    }
+    if (command.length > MAX_COMMAND_LEN) return { ok: false, error: 'command is too long' };
+    const args = validateArgs(body.args);
+    if (!args.ok) return args;
+    out.command = command;
+    out.args = args.value;
+    if (typeof body.cwd === 'string' && body.cwd) out.cwd = body.cwd;
+    if (typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs) && body.timeoutMs > 0) {
+      out.timeoutMs = Math.min(body.timeoutMs, 300_000);
+    }
+  } else if (callbackUrl) {
+    out.callbackUrl = callbackUrl;
+    if (body.method !== undefined) {
+      if (!isWebhookMethod(body.method)) {
+        return { ok: false, error: `method must be one of ${WEBHOOK_METHODS.join(', ')}` };
+      }
+      out.method = body.method;
+    }
+    const headers = validateHeaders(body.headers);
+    if (!headers.ok) return headers;
+    if (Object.keys(headers.value).length > 0) out.headers = headers.value;
+  } else if (queueName) {
+    out.queueName = queueName;
+  }
+
+  if (body.jqTransform !== undefined && body.jqTransform !== null && body.jqTransform !== '') {
+    if (typeof body.jqTransform !== 'string') return { ok: false, error: 'jqTransform must be a string' };
+    if (body.jqTransform.length > MAX_JQ_PROGRAM_LEN) return { ok: false, error: 'jqTransform program is too long' };
+    out.jqTransform = body.jqTransform;
+  }
+
+  return { ok: true, value: out };
 }
 
 const authClientCache = new WeakMap<object, ReturnType<typeof createAuthClient>>();
@@ -231,6 +351,16 @@ adminApi.use('*', async (c, next) => {
 // GET /admin/api/me
 adminApi.get('/me', (c) => {
   return c.json({ userId: c.var.session.sub, email: c.var.session.email });
+});
+
+// GET /admin/api/runtime — capability flags for the current deployment runtime
+adminApi.get('/runtime', (c) => {
+  const node = isNodeRuntime();
+  return c.json({
+    runtime: node ? 'node' : 'workers',
+    // CLI hooks can only spawn processes on the self-hosted Node.js runtime.
+    supportsCliHooks: node,
+  });
 });
 
 // GET /admin/api/login-url — returns the OpenAuth authorization URL
@@ -464,22 +594,14 @@ adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
   if (!getPiece(pieceName)) return c.json({ error: 'Piece not found' }, 404);
   if (!getTrigger(pieceName, triggerName)) return c.json({ error: 'Trigger not found' }, 404);
 
-  let body: { callbackUrl?: string; queueName?: string; pieceToken?: string; userId?: string; propsValue?: Record<string, unknown> };
+  let body: Record<string, unknown> & { pieceToken?: string; userId?: string; propsValue?: Record<string, unknown> };
   try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
 
-  const { callbackUrl, queueName, pieceToken, userId, propsValue = {} } = body;
-  const effectiveUserId = userId?.trim() || c.var.session.sub;
+  const { pieceToken, userId, propsValue = {} } = body;
+  const effectiveUserId = (typeof userId === 'string' ? userId.trim() : '') || c.var.session.sub;
 
-  if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
-  if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
-
-  if (callbackUrl && !isValidCallbackUrl(callbackUrl)) {
-    return c.json({ error: 'callbackUrl must be a valid HTTPS URL (or http://localhost / http://127.0.0.1 for local dev)' }, 400);
-  }
-
-  if (queueName && !resolveQueueBinding(c.env, queueName)) {
-    return c.json({ error: `Queue binding not found for "${queueName}"` }, 400);
-  }
+  const delivery = validateDeliveryBody(body, c.env);
+  if (!delivery.ok) return c.json({ error: delivery.error }, 400);
 
   const kv = requireKVBinding(c.env, 'TOKEN_STORE');
   if (!(await isTriggerEnabledForUser(kv, effectiveUserId, pieceName, triggerName))) {
@@ -490,10 +612,10 @@ adminApi.post('/subscriptions/:piece/:trigger', async (c) => {
   const sub: WebhookSubscription = {
     id: subId,
     trigger: triggerName,
-    propsValue,
-    ...(callbackUrl ? { callbackUrl } : { queueName }),
+    propsValue: (propsValue as Record<string, unknown>) ?? {},
+    ...delivery.value,
     ...(effectiveUserId ? { userId: effectiveUserId } : {}),
-    ...(pieceToken ? { pieceToken } : {}),
+    ...(typeof pieceToken === 'string' && pieceToken ? { pieceToken } : {}),
     createdAt: new Date().toISOString(),
   };
   await kv.put(SUB_KEY(pieceName, subId), JSON.stringify(sub));
@@ -509,29 +631,68 @@ adminApi.patch('/subscriptions/:piece/:id', async (c) => {
   const raw = await kv.get(SUB_KEY(pieceName, subId));
   if (!raw) return c.json({ error: 'Subscription not found' }, 404);
 
-  let body: { callbackUrl?: string; queueName?: string };
+  let body: Record<string, unknown>;
   try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
 
-  const { callbackUrl, queueName } = body;
-  if (callbackUrl && queueName) return c.json({ error: 'Provide either callbackUrl or queueName, not both' }, 400);
-  if (!callbackUrl && !queueName) return c.json({ error: 'Missing callbackUrl or queueName' }, 400);
-
-  if (callbackUrl && !isValidCallbackUrl(callbackUrl)) {
-    return c.json({ error: 'callbackUrl must be a valid HTTPS URL (or http://localhost / http://127.0.0.1 for local dev)' }, 400);
-  }
-
-  if (queueName && !resolveQueueBinding(c.env, queueName)) {
-    return c.json({ error: `Queue binding not found for "${queueName}"` }, 400);
-  }
+  const delivery = validateDeliveryBody(body, c.env);
+  if (!delivery.ok) return c.json({ error: delivery.error }, 400);
 
   const existing = JSON.parse(raw) as WebhookSubscription;
-  const { callbackUrl: _cb, queueName: _qn, ...rest } = existing;
+  // Drop all delivery/transform fields, then re-apply the validated set so the
+  // PATCH fully replaces delivery config without leaking stale fields.
+  const {
+    callbackUrl: _cb,
+    queueName: _qn,
+    command: _cmd,
+    args: _args,
+    cwd: _cwd,
+    timeoutMs: _to,
+    method: _m,
+    headers: _h,
+    jqTransform: _jq,
+    ...rest
+  } = existing;
   const updated: WebhookSubscription = {
     ...rest,
-    ...(callbackUrl ? { callbackUrl } : { queueName }),
+    ...delivery.value,
   };
   await kv.put(SUB_KEY(pieceName, subId), JSON.stringify(updated));
   return c.json({ ok: true });
+});
+
+// POST /admin/api/subscriptions/jq-sample — validate/preview a jq program
+// against a sample outbound webhook envelope. Admin-only.
+adminApi.post('/subscriptions/jq-sample', async (c) => {
+  let body: { piece?: string; trigger?: string; program?: string; sample?: unknown };
+  try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
+
+  const program = typeof body.program === 'string' ? body.program : '';
+  if (program.trim() === '') return c.json({ error: 'Missing jq program' }, 400);
+  if (program.length > MAX_JQ_PROGRAM_LEN) return c.json({ error: 'jqTransform program is too long' }, 400);
+
+  // Build the input envelope the same shape dispatchWebhook would transform.
+  // Prefer a caller-supplied sample; otherwise synthesise a minimal envelope.
+  let input: unknown;
+  if (body.sample !== undefined && body.sample !== null) {
+    // If the caller passes an events array or a single event, wrap it; if they
+    // pass a full envelope ({ piece, trigger, events }), use it directly.
+    const s = body.sample as Record<string, unknown>;
+    if (s && typeof s === 'object' && Array.isArray((s as { events?: unknown }).events)) {
+      input = s;
+    } else {
+      input = {
+        piece: body.piece ?? '',
+        trigger: body.trigger ?? '',
+        events: Array.isArray(body.sample) ? body.sample : [body.sample],
+      };
+    }
+  } else {
+    input = { piece: body.piece ?? '', trigger: body.trigger ?? '', events: [] };
+  }
+
+  const result = await validateJq(program, input);
+  if (result.ok) return c.json({ ok: true, input, result: result.result });
+  return c.json({ ok: false, input, error: result.error });
 });
 
 // DELETE /admin/api/subscriptions/:piece/:id — admin-privileged deletion
@@ -555,9 +716,9 @@ adminApi.get('/triggers/groups', async (c) => {
   const all = await listAllSubscriptions(kv);
   const pieceSummaries = listPieces();
 
-  // Group by delivery target: callbackUrl or queueName
+  // Group by delivery target: callbackUrl, queueName, or command
   const groupMap = new Map<string, {
-    endpointType: 'callbackUrl' | 'queueName';
+    endpointType: 'callbackUrl' | 'queueName' | 'command';
     endpointValue: string;
     members: Array<{
       subscriptionId: string;
@@ -570,12 +731,18 @@ adminApi.get('/triggers/groups', async (c) => {
       createdAt: string;
       owner: { kind: string; label: string; ownerKey: string };
       deliveryTarget: { type: string; value: string };
+      method?: string;
+      headers?: Record<string, string>;
+      args?: string[];
+      cwd?: string;
+      jqTransform?: string;
     }>;
   }>();
 
   for (const { pieceName, sub } of all) {
-    const endpointType = sub.queueName ? 'queueName' : 'callbackUrl';
-    const endpointValue = sub.queueName ?? sub.callbackUrl ?? '';
+    const endpointType: 'callbackUrl' | 'queueName' | 'command' =
+      sub.command ? 'command' : sub.queueName ? 'queueName' : 'callbackUrl';
+    const endpointValue = sub.command ?? sub.queueName ?? sub.callbackUrl ?? '';
     if (!endpointValue) continue;
 
     const endpointKey = `${endpointType}:${endpointValue}`;
@@ -619,6 +786,11 @@ adminApi.get('/triggers/groups', async (c) => {
       createdAt: sub.createdAt,
       owner,
       deliveryTarget: { type: endpointType, value: endpointValue },
+      ...(sub.method ? { method: sub.method } : {}),
+      ...(sub.headers ? { headers: sub.headers } : {}),
+      ...(sub.args && sub.args.length ? { args: sub.args } : {}),
+      ...(sub.cwd ? { cwd: sub.cwd } : {}),
+      ...(sub.jqTransform ? { jqTransform: sub.jqTransform } : {}),
     });
   }
 

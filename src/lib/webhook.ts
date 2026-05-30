@@ -7,8 +7,23 @@ import { timingSafeEqual } from './admin-session';
 import { resolveApRuntimeAuth, resolveNativeRuntimeAuth } from './auth-resolve';
 import { buildApTriggerContext, buildNativeTriggerContext } from './ap-context';
 import type { Env } from '../framework/types';
-import { requireKVBinding } from './env';
+import { getEnvStr, requireKVBinding } from './env';
 import { isTriggerEnabledInState, loadUserToolState } from './user-tool-state';
+import { applyJq } from './jq';
+import { isNodeRuntime } from './cli-hook';
+
+// ---------------------------------------------------------------------------
+// HTTP method whitelist for callback delivery
+// ---------------------------------------------------------------------------
+
+/** HTTP methods allowed for callback delivery. */
+export const WEBHOOK_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE', 'GET'] as const;
+export type WebhookMethod = (typeof WEBHOOK_METHODS)[number];
+
+/** Narrow an arbitrary value to a supported {@link WebhookMethod}. */
+export function isWebhookMethod(value: unknown): value is WebhookMethod {
+  return typeof value === 'string' && (WEBHOOK_METHODS as readonly string[]).includes(value);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +42,34 @@ export interface WebhookSubscription {
    * Mutually exclusive with `callbackUrl`.
    */
   queueName?: string;
+  /**
+   * Shell-free CLI command to run for each matched event, delivering the
+   * (optionally jq-transformed) payload as JSON on stdin. Only executed on the
+   * self-hosted Node.js runtime. Mutually exclusive with `callbackUrl`/`queueName`.
+   */
+  command?: string;
+  /** Arguments for `command`. Values may contain `${ENV}` references. */
+  args?: string[];
+  /** Working directory for `command`. */
+  cwd?: string;
+  /** Kill the spawned `command` after this many milliseconds. */
+  timeoutMs?: number;
+  /**
+   * HTTP method for `callbackUrl` delivery. Defaults to POST.
+   * One of {@link WEBHOOK_METHODS}.
+   */
+  method?: WebhookMethod;
+  /**
+   * Extra request headers for `callbackUrl` delivery. Header *values* may embed
+   * `${ENV}` references that are resolved against the worker env at dispatch
+   * time, so secrets are never persisted on the subscription record.
+   */
+  headers?: Record<string, string>;
+  /**
+   * Standard jq program applied to the outbound `{ piece, trigger, events }`
+   * envelope before delivery. When the program errors, delivery is skipped.
+   */
+  jqTransform?: string;
   /** @deprecated Legacy single-field runtime auth from older subscription records. */
   bearerToken?: string;
   /** OAuth2 KV lookup key, when the trigger runs under a stored user token. */
@@ -73,10 +116,41 @@ export function sameSubscriptionOwner(
   return subKeys.every((k, i) => k === ownerKeys[i] && subProps[k] === ownerProps[k]);
 }
 
+// ---------------------------------------------------------------------------
+// Env / secret injection
+// ---------------------------------------------------------------------------
+
+/** Matches `${NAME}` references where NAME is a valid env identifier. */
+const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
 /**
- * Verify a Slack (or compatible) HMAC-SHA256 request signature.
- * Rejects requests older than 5 minutes to prevent replay attacks.
+ * Replace every `${NAME}` reference in `value` with the resolved env var,
+ * looked up through {@link getEnvStr} (so `FREEPIECES_`/`FP_`/bare variants all
+ * work). Unknown references resolve to an empty string. Used to inject env vars
+ * and secrets into header values and CLI arguments at dispatch time.
  */
+export function interpolateEnvRefs(value: string, env: Env): string {
+  if (typeof value !== 'string' || value.indexOf('${') === -1) return value;
+  return value.replace(ENV_REF_RE, (_match, name: string) => getEnvStr(env, name) ?? '');
+}
+
+/** Apply {@link interpolateEnvRefs} to every value of a headers map. */
+export function resolveHeaderInjections(
+  headers: Record<string, string> | undefined,
+  env: Env,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!headers) return out;
+  for (const [key, raw] of Object.entries(headers)) {
+    out[key] = interpolateEnvRefs(raw, env);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Slack signature verification
+// ---------------------------------------------------------------------------
+
 export async function verifySlackSignature(
   signingSecret: string,
   rawBody: string,
@@ -252,7 +326,40 @@ export async function dispatchWebhook(
 
       if (events.length === 0) return;
 
-      const eventPayload = { piece: pieceName, trigger: sub.trigger, events };
+      const baseEnvelope = { piece: pieceName, trigger: sub.trigger, events };
+
+      // Apply optional jq transform to the outbound payload. On any jq error,
+      // skip delivery rather than sending the untransformed payload.
+      let eventPayload: unknown = baseEnvelope;
+      if (sub.jqTransform && sub.jqTransform.trim() !== '') {
+        try {
+          eventPayload = await applyJq(baseEnvelope, sub.jqTransform);
+        } catch (err: unknown) {
+          console.error(`[freepieces] jq transform failed for sub "${sub.id}":`, err);
+          return;
+        }
+      }
+
+      // Run a CLI command (Node runtime only)
+      if (sub.command) {
+        if (!isNodeRuntime()) {
+          console.error(`[freepieces] CLI hook "${sub.command}" skipped: not supported on this runtime.`);
+          return;
+        }
+        try {
+          const { runCliHook } = await import('./cli-hook.js');
+          await runCliHook({
+            command: sub.command,
+            args: (sub.args ?? []).map((a) => interpolateEnvRefs(a, env)),
+            cwd: sub.cwd,
+            timeoutMs: sub.timeoutMs,
+            stdin: JSON.stringify(eventPayload),
+          });
+        } catch (err: unknown) {
+          console.error(`[freepieces] CLI hook "${sub.command}" failed:`, err);
+        }
+        return;
+      }
 
       // Deliver to Cloudflare Queue when queueName is set
       if (sub.queueName) {
@@ -269,9 +376,14 @@ export async function dispatchWebhook(
 
       // POST matched events to the subscriber's callback URL (best-effort)
       if (sub.callbackUrl) {
+        const method = isWebhookMethod(sub.method) ? sub.method : 'POST';
+        const headers: Record<string, string> = {
+          'content-type': 'application/json',
+          ...resolveHeaderInjections(sub.headers, env),
+        };
         await fetch(sub.callbackUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          method,
+          headers,
           body: JSON.stringify(eventPayload),
         }).catch((err: unknown) => {
           console.error(`[freepieces] Delivery to ${sub.callbackUrl} failed:`, err);
